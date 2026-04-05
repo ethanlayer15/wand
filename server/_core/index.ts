@@ -1,12 +1,13 @@
 import "dotenv/config";
 import express from "express";
+import fs from "fs";
+import path from "path";
 import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAuthRoutes } from "../googleAuth";
-import { setupVite, serveStatic } from "./vite";
 import { startCronJobs } from "../cron";
 import { stripeWebhookRouter } from "../stripeWebhook";
 
@@ -45,9 +46,20 @@ async function startServer() {
 
   // Vite dev server (HMR) or static file serving
   if (isDev) {
+    // Dynamic import so vite is not required in production
+    const { setupVite } = await import("./vite");
     await setupVite(app, server);
   } else {
-    serveStatic(app);
+    // Serve static files in production
+    const distPath = path.resolve(import.meta.dirname, "public");
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath, { maxAge: "1y", immutable: true }));
+      app.use("*", (_req, res) => {
+        res.sendFile(path.resolve(distPath, "index.html"));
+      });
+    } else {
+      console.error(`[Server] Static files not found at ${distPath}`);
+    }
   }
 
   server.listen(PORT, "0.0.0.0", () => {
