@@ -126,6 +126,7 @@ export default function LeisrBilling() {
 
   const sendLeisrInvoiceMutation = trpc.billing.sendLeisrInvoice.useMutation();
   const previewLeisrInvoiceMutation = trpc.billing.previewLeisrInvoice.useMutation();
+  const bulkUpsertRatesMutation = trpc.billing.rateCards.bulkUpsert.useMutation();
 
   // ── Rate card lookup ──────────────────────────────────────────────────
 
@@ -493,14 +494,44 @@ export default function LeisrBilling() {
                 <Input value={invoiceDescription} onChange={(e) => setInvoiceDescription(e.target.value)} placeholder="e.g. April 2026 5STR Invoice" />
               </div>
             </div>
-            <div className="flex items-center gap-3 pt-4 border-t">
-              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <Checkbox checked={hideAlreadyBilled} onCheckedChange={(v) => setHideAlreadyBilled(!!v)} />
-                <span className="text-muted-foreground">Hide already billed tasks</span>
-              </label>
-              {hasFetched && billedTaskIds.size > 0 && !hideAlreadyBilled && (
-                <span className="text-xs text-amber-600">{billedTaskIds.size} previously billed included</span>
-              )}
+            <div className="flex items-center justify-between gap-3 pt-4 border-t">
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <Checkbox checked={hideAlreadyBilled} onCheckedChange={(v) => setHideAlreadyBilled(!!v)} />
+                  <span className="text-muted-foreground">Hide already billed tasks</span>
+                </label>
+                {hasFetched && billedTaskIds.size > 0 && !hideAlreadyBilled && (
+                  <span className="text-xs text-amber-600">{billedTaskIds.size} previously billed included</span>
+                )}
+              </div>
+              <Button variant="ghost" size="sm" className="text-xs text-muted-foreground h-7"
+                disabled={bulkUpsertRatesMutation.isPending}
+                onClick={async () => {
+                  try {
+                    const res = await bulkUpsertRatesMutation.mutateAsync({
+                      entries: [
+                        { propertySearch: "wyndsong", taskType: "turnover-clean", amount: "195.00" },
+                        { propertySearch: "redwing", taskType: "turnover-clean", amount: "165.00" },
+                        { propertySearch: "quaint cottage", taskType: "turnover-clean", amount: "140.00" },
+                        { propertySearch: "mountain view 534", taskType: "turnover-clean", amount: "150.00" },
+                        { propertySearch: "golden jewel/madison", taskType: "turnover-clean", amount: "430.00" },
+                        { propertySearch: "golden jewel", taskType: "turnover-clean", amount: "225.00" },
+                        { propertySearch: "madison", taskType: "turnover-clean", amount: "205.00" },
+                        { propertySearch: "commerce loft", taskType: "turnover-clean", amount: "150.00" },
+                      ],
+                    });
+                    const summary = res.results.map((r: any) =>
+                      r.errors.length > 0 ? `❌ ${r.search}: ${r.errors[0]}` : `✅ ${r.search}: ${r.matched.join(", ")} (${r.created} created, ${r.updated} updated)`
+                    ).join("\n");
+                    toast.success("Rate cards updated!", { description: summary, duration: 10000 });
+                    rateCardsQuery.refetch();
+                  } catch (err: any) {
+                    toast.error(`Failed: ${err.message}`);
+                  }
+                }}
+              >
+                {bulkUpsertRatesMutation.isPending ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Updating...</> : "Seed Missing Rate Cards"}
+              </Button>
             </div>
             <div className="flex items-center justify-between pt-2">
               <p className="text-sm text-muted-foreground">
