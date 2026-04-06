@@ -455,7 +455,7 @@ function DashboardLayoutContent({
             <SidebarTrigger className="h-9 w-9 rounded-lg" />
           </div>
         )}
-        <main className="flex-1">{children}</main>
+        <main className="flex-1 min-w-0 overflow-x-auto">{children}</main>
       </SidebarInset>
     </>
   );
