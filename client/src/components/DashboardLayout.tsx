@@ -438,14 +438,14 @@ function DashboardLayoutContent({
           </SidebarFooter>
         </Sidebar>
 
-      <SidebarInset className="bg-background">
+      <div className="flex-1 min-w-0 overflow-hidden bg-background" style={{ maxWidth: `calc(100vw - var(--sidebar-width, 0px))` }}>
         {isMobile && (
           <div className="flex border-b h-14 items-center px-4 bg-background sticky top-0 z-40">
             <SidebarTrigger className="h-9 w-9 rounded-lg" />
           </div>
         )}
-        <main className="min-w-0 overflow-x-auto">{children}</main>
-      </SidebarInset>
+        <div className="w-full overflow-x-auto">{children}</div>
+      </div>
     </>
   );
 }
