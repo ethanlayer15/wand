@@ -160,3 +160,42 @@ export async function createAndSendInvoice(params: {
 
   return finalizedInvoice;
 }
+
+/**
+ * Create a DRAFT Stripe Invoice (not finalized, not sent).
+ * Returns the draft invoice — user can preview/edit in Stripe Dashboard before sending.
+ */
+export async function createDraftInvoice(params: {
+  customerId: string;
+  lineItems: Array<{
+    description: string;
+    amountCents: number;
+  }>;
+  description?: string;
+  metadata?: Record<string, string>;
+}): Promise<Stripe.Invoice> {
+  const stripe = getStripe();
+
+  // Create invoice as draft (auto_advance: false keeps it as draft)
+  const invoice = await stripe.invoices.create({
+    customer: params.customerId,
+    collection_method: "send_invoice",
+    days_until_due: 30,
+    description: params.description || undefined,
+    metadata: params.metadata || {},
+    auto_advance: false,
+  });
+
+  // Add line items
+  for (const item of params.lineItems) {
+    await stripe.invoiceItems.create({
+      customer: params.customerId,
+      invoice: invoice.id,
+      amount: item.amountCents,
+      currency: "usd",
+      description: item.description,
+    });
+  }
+
+  return invoice;
+}

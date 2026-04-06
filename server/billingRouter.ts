@@ -16,6 +16,7 @@ import {
   customerHasPaymentMethod,
   chargeCardOnFile,
   createAndSendInvoice,
+  createDraftInvoice,
 } from "./stripe";
 import { getBreezewayProperties } from "./db";
 import { autoMapSuggestions } from "./fuzzyMatch";
@@ -515,6 +516,119 @@ export const billingRouter = router({
         amount: (totalCents / 100).toFixed(2),
         customerName: leisrCustomer.name || "Leisr Stays",
         customerId: leisrCustomer.id,
+      };
+    }),
+
+  // ── Leisr Billing: Preview (Draft) Invoice ─────────────────────────────
+
+  previewLeisrInvoice: managerProcedure
+    .input(
+      z.object({
+        lineItems: z.array(
+          z.object({
+            propertyName: z.string(),
+            description: z.string().optional(),
+            quantity: z.number(),
+            unitPrice: z.string(),
+            amount: z.string(),
+            taskIds: z.array(z.string()),
+            taskNames: z.array(z.string()),
+          })
+        ),
+        invoiceDescription: z.string(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      // 1. Find Leisr customer
+      const customers = await listStripeCustomers();
+      const leisrCustomer = customers.find(
+        (c) => c.name && c.name.toLowerCase().includes("leisr")
+      );
+      if (!leisrCustomer) {
+        throw new Error(
+          'Could not find a Stripe customer matching "Leisr Stays". Please create one in Stripe first.'
+        );
+      }
+
+      // 2. Build Stripe line items
+      const stripeLineItems = input.lineItems.map((item) => ({
+        description:
+          item.description ||
+          (item.quantity > 1
+            ? `${item.propertyName} × ${item.quantity} cleans`
+            : `${item.propertyName} — ${item.taskNames[0] || "Service"}`),
+        amountCents: Math.round(parseFloat(item.amount) * 100),
+      }));
+
+      const totalCents = stripeLineItems.reduce((s, i) => s + i.amountCents, 0);
+      if (totalCents < 50) {
+        throw new Error("Total amount must be at least $0.50");
+      }
+
+      // 3. Create DRAFT invoice (not finalized, not sent)
+      const invoice = await createDraftInvoice({
+        customerId: leisrCustomer.id,
+        lineItems: stripeLineItems,
+        description: input.invoiceDescription,
+        metadata: {
+          source: "wand_leisr_billing",
+          tag: "Leisr Billing",
+          status: "draft_preview",
+          property_count: String(input.lineItems.length),
+          task_count: String(
+            input.lineItems.reduce((s, i) => s + i.taskIds.length, 0)
+          ),
+        },
+      });
+
+      // 4. Record each task as billed (status: "draft")
+      for (const item of input.lineItems) {
+        for (let i = 0; i < item.taskIds.length; i++) {
+          await db.insert(billingRecord).values({
+            breezewayTaskId: item.taskIds[i],
+            breezewayTaskName: item.taskNames[i] || item.propertyName,
+            propertyId: "",
+            propertyName: item.propertyName,
+            stripeCustomerId: leisrCustomer.id,
+            stripeInvoiceId: invoice.id,
+            amount: item.unitPrice,
+            billingMethod: "invoice",
+            status: "pending",
+          });
+        }
+      }
+
+      // 5. Audit log
+      await db.insert(billingAuditLog).values({
+        action: "leisr_invoice_draft",
+        stripeCustomerId: leisrCustomer.id,
+        stripeInvoiceId: invoice.id,
+        amount: (totalCents / 100).toFixed(2),
+        details: {
+          invoiceDescription: input.invoiceDescription,
+          propertyCount: input.lineItems.length,
+          taskCount: input.lineItems.reduce((s, i) => s + i.taskIds.length, 0),
+          lineItems: input.lineItems.map((i) => ({
+            property: i.propertyName,
+            qty: i.quantity,
+            unitPrice: i.unitPrice,
+            total: i.amount,
+          })),
+        },
+      });
+
+      // Dashboard URL for the draft invoice
+      const dashboardUrl = `https://dashboard.stripe.com/invoices/${invoice.id}`;
+
+      return {
+        success: true,
+        invoiceId: invoice.id,
+        dashboardUrl,
+        amount: (totalCents / 100).toFixed(2),
+        customerName: leisrCustomer.name || "Leisr Stays",
       };
     }),
 

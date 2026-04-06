@@ -83,10 +83,12 @@ export default function LeisrBilling() {
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  // Multi-select for bulk exclude on included items
   const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set());
+  // Ignored keys — hidden from excluded list
+  const [ignoredKeys, setIgnoredKeys] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<{
-    success: boolean; invoiceId?: string; invoiceUrl?: string; amount?: string; error?: string;
+    success: boolean; invoiceId?: string; invoiceUrl?: string; dashboardUrl?: string;
+    amount?: string; error?: string; isDraft?: boolean;
   } | null>(null);
 
   // ── Queries ─────────────────────────────────────────────────────────
@@ -120,6 +122,7 @@ export default function LeisrBilling() {
   }, [tasksQuery.data, billedTaskIds]);
 
   const sendLeisrInvoiceMutation = trpc.billing.sendLeisrInvoice.useMutation();
+  const previewLeisrInvoiceMutation = trpc.billing.previewLeisrInvoice.useMutation();
 
   // ── Rate card lookup ──────────────────────────────────────────────────
 
@@ -306,6 +309,27 @@ export default function LeisrBilling() {
     setCheckedKeys(new Set());
   };
 
+  const bulkIgnore = () => {
+    if (checkedKeys.size === 0) return;
+    // Only ignore excluded items
+    const keysToIgnore = excludedItems.filter((i) => checkedKeys.has(i.key)).map((i) => i.key);
+    if (keysToIgnore.length === 0) return;
+    setIgnoredKeys((prev) => {
+      const next = new Set(prev);
+      keysToIgnore.forEach((k) => next.add(k));
+      return next;
+    });
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      keysToIgnore.forEach((k) => next.delete(k));
+      return next;
+    });
+  };
+
+  const unignoreAll = () => {
+    setIgnoredKeys(new Set());
+  };
+
   const updateLineItem = (key: string, field: keyof LineItem, value: any) => {
     setLineItems((prev) => prev.map((item) => {
       if (item.key !== key) return item;
@@ -339,7 +363,8 @@ export default function LeisrBilling() {
   // ── Derived data ──────────────────────────────────────────────────────
 
   const includedItems = useMemo(() => lineItems.filter((i) => i.included), [lineItems]);
-  const excludedItems = useMemo(() => lineItems.filter((i) => !i.included), [lineItems]);
+  const excludedItems = useMemo(() => lineItems.filter((i) => !i.included && !ignoredKeys.has(i.key)), [lineItems, ignoredKeys]);
+  const ignoredCount = useMemo(() => lineItems.filter((i) => !i.included && ignoredKeys.has(i.key)).length, [lineItems, ignoredKeys]);
 
   const flaggedItems = useMemo(
     () => lineItems.filter((i) => i.flags.length > 0),
@@ -361,25 +386,47 @@ export default function LeisrBilling() {
     [excludedItems, checkedKeys]
   );
 
-  const handleSendInvoice = async () => {
+  const buildInvoicePayload = () => {
     const billableItems = includedItems.filter((i) => parseFloat(i.unitPrice) > 0);
-    if (billableItems.length === 0) { toast.error("No billable items with a price > $0"); return; }
+    if (billableItems.length === 0) return null;
+    return {
+      lineItems: billableItems.map((item) => ({
+        propertyName: item.propertyName,
+        description: item.isGroupedClean
+          ? `${item.propertyName} × ${item.quantity} cleans`
+          : `${item.propertyName} — ${item.label}`,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        amount: (parseFloat(item.unitPrice) * item.quantity).toFixed(2),
+        taskIds: item.taskIds,
+        taskNames: item.taskNames,
+      })),
+      invoiceDescription,
+    };
+  };
+
+  const handlePreviewInvoice = async () => {
+    const payload = buildInvoicePayload();
+    if (!payload) { toast.error("No billable items with a price > $0"); return; }
 
     try {
-      const res = await sendLeisrInvoiceMutation.mutateAsync({
-        lineItems: billableItems.map((item) => ({
-          propertyName: item.propertyName,
-          description: item.isGroupedClean
-            ? `${item.propertyName} × ${item.quantity} cleans`
-            : `${item.propertyName} — ${item.label}`,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          amount: (parseFloat(item.unitPrice) * item.quantity).toFixed(2),
-          taskIds: item.taskIds,
-          taskNames: item.taskNames,
-        })),
-        invoiceDescription,
-      });
+      const res = await previewLeisrInvoiceMutation.mutateAsync(payload);
+      setResult({ success: true, invoiceId: res.invoiceId, dashboardUrl: res.dashboardUrl, amount: res.amount, isDraft: true });
+      setStep(3);
+      toast.success("Draft invoice created — preview it in Stripe");
+    } catch (err: any) {
+      setResult({ success: false, error: err.message });
+      setStep(3);
+      toast.error(`Failed: ${err.message}`);
+    }
+  };
+
+  const handleSendInvoice = async () => {
+    const payload = buildInvoicePayload();
+    if (!payload) { toast.error("No billable items with a price > $0"); return; }
+
+    try {
+      const res = await sendLeisrInvoiceMutation.mutateAsync(payload);
       setResult({ success: true, invoiceId: res.invoiceId, invoiceUrl: res.invoiceUrl || undefined, amount: res.amount });
       setStep(3);
       toast.success(`Invoice sent to ${res.customerName}!`);
@@ -389,6 +436,8 @@ export default function LeisrBilling() {
       toast.error(`Failed: ${err.message}`);
     }
   };
+
+  const isMutating = sendLeisrInvoiceMutation.isPending || previewLeisrInvoiceMutation.isPending;
 
   // ── Render ────────────────────────────────────────────────────────────
 
@@ -767,90 +816,112 @@ export default function LeisrBilling() {
           </Card>
 
           {/* ── Excluded Items ── */}
-          {excludedItems.length > 0 && (
+          {(excludedItems.length > 0 || ignoredCount > 0) && (
             <Card>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-base text-muted-foreground">Excluded ({excludedItems.length})</CardTitle>
+                  <div className="flex items-center gap-3">
+                    <CardTitle className="text-base text-muted-foreground">Excluded ({excludedItems.length})</CardTitle>
+                    {ignoredCount > 0 && (
+                      <button onClick={unignoreAll} className="text-xs text-muted-foreground hover:text-foreground transition-colors underline">
+                        {ignoredCount} ignored — show all
+                      </button>
+                    )}
+                  </div>
                   {checkedExcludedCount > 0 && (
-                    <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={bulkInclude}>
-                      <Eye className="h-3 w-3" /> Include Selected ({checkedExcludedCount})
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={bulkIgnore}>
+                        <EyeOff className="h-3 w-3" /> Ignore Selected ({checkedExcludedCount})
+                      </Button>
+                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={bulkInclude}>
+                        <Eye className="h-3 w-3" /> Include Selected ({checkedExcludedCount})
+                      </Button>
+                    </div>
                   )}
                 </div>
               </CardHeader>
-              <CardContent>
-                <div className="border rounded-md overflow-hidden border-dashed">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/30">
-                      <tr>
-                        <th className="p-2.5 w-10">
-                          <Checkbox
-                            checked={excludedItems.length > 0 && excludedItems.every((i) => checkedKeys.has(i.key))}
-                            onCheckedChange={() => toggleCheckAll(excludedItems.map((i) => i.key))}
-                          />
-                        </th>
-                        <th className="p-2.5 text-left text-xs text-muted-foreground font-medium">Task</th>
-                        <th className="p-2.5 text-left text-xs text-muted-foreground font-medium">Property</th>
-                        <th className="p-2.5 text-left text-xs text-muted-foreground font-medium">Date</th>
-                        <th className="p-2.5 text-right text-xs text-muted-foreground font-medium w-28">Price</th>
-                        <th className="p-2.5 w-16" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {excludedItems.map((item) => (
-                        <tr key={item.key} className="border-t first:border-t-0">
-                          <td className="p-2.5">
-                            <Checkbox checked={checkedKeys.has(item.key)} onCheckedChange={() => toggleChecked(item.key)} />
-                          </td>
-                          <td className="p-2.5">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                              <span>{item.label}</span>
-                              {item.flags.length > 0 && (
-                                <Badge className="bg-amber-100 text-amber-700 text-[9px] px-1 py-0"><AlertTriangle className="h-2.5 w-2.5" /></Badge>
-                              )}
-                              {item.taskIds.length === 1 && (
-                                <a href={`https://app.breezeway.io/task/${item.taskIds[0]}`} target="_blank" rel="noopener noreferrer"
-                                  className="hover:text-violet-600 transition-colors shrink-0">
-                                  <ExternalLink className="h-3 w-3" />
-                                </a>
-                              )}
-                            </div>
-                          </td>
-                          <td className="p-2.5 text-muted-foreground text-xs">{item.propertyName}</td>
-                          <td className="p-2.5 text-muted-foreground text-xs">{item.dates[0]}</td>
-                          <td className="p-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <span className="text-muted-foreground text-xs">$</span>
-                              <Input value={item.unitPrice} onChange={(e) => updateLineItem(item.key, "unitPrice", e.target.value)}
-                                className="w-20 text-right h-7 text-sm" placeholder="0.00" />
-                            </div>
-                          </td>
-                          <td className="p-2.5">
-                            <Button variant="outline" size="sm" className="h-6 text-xs px-2"
-                              onClick={() => updateLineItem(item.key, "included", true)}>
-                              Include
-                            </Button>
-                          </td>
+              {excludedItems.length > 0 && (
+                <CardContent>
+                  <div className="border rounded-md overflow-hidden border-dashed">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/30">
+                        <tr>
+                          <th className="p-2.5 w-10">
+                            <Checkbox
+                              checked={excludedItems.length > 0 && excludedItems.every((i) => checkedKeys.has(i.key))}
+                              onCheckedChange={() => toggleCheckAll(excludedItems.map((i) => i.key))}
+                            />
+                          </th>
+                          <th className="p-2.5 text-left text-xs text-muted-foreground font-medium">Task</th>
+                          <th className="p-2.5 text-left text-xs text-muted-foreground font-medium">Property</th>
+                          <th className="p-2.5 text-left text-xs text-muted-foreground font-medium">Date</th>
+                          <th className="p-2.5 text-right text-xs text-muted-foreground font-medium w-28">Price</th>
+                          <th className="p-2.5 w-16" />
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
+                      </thead>
+                      <tbody>
+                        {excludedItems.map((item) => (
+                          <tr key={item.key} className="border-t first:border-t-0">
+                            <td className="p-2.5">
+                              <Checkbox checked={checkedKeys.has(item.key)} onCheckedChange={() => toggleChecked(item.key)} />
+                            </td>
+                            <td className="p-2.5">
+                              <div className="flex items-center gap-2 text-muted-foreground">
+                                <span>{item.label}</span>
+                                {item.flags.length > 0 && (
+                                  <Badge className="bg-amber-100 text-amber-700 text-[9px] px-1 py-0"><AlertTriangle className="h-2.5 w-2.5" /></Badge>
+                                )}
+                                {item.taskIds.length === 1 && (
+                                  <a href={`https://app.breezeway.io/task/${item.taskIds[0]}`} target="_blank" rel="noopener noreferrer"
+                                    className="hover:text-violet-600 transition-colors shrink-0">
+                                    <ExternalLink className="h-3 w-3" />
+                                  </a>
+                                )}
+                              </div>
+                            </td>
+                            <td className="p-2.5 text-muted-foreground text-xs">{item.propertyName}</td>
+                            <td className="p-2.5 text-muted-foreground text-xs">{item.dates[0]}</td>
+                            <td className="p-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <span className="text-muted-foreground text-xs">$</span>
+                                <Input value={item.unitPrice} onChange={(e) => updateLineItem(item.key, "unitPrice", e.target.value)}
+                                  className="w-20 text-right h-7 text-sm" placeholder="0.00" />
+                              </div>
+                            </td>
+                            <td className="p-2.5">
+                              <Button variant="outline" size="sm" className="h-6 text-xs px-2"
+                                onClick={() => updateLineItem(item.key, "included", true)}>
+                                Include
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              )}
             </Card>
           )}
 
           {/* ── Bottom actions ── */}
           <div className="flex items-center justify-between">
             <Button variant="outline" onClick={() => setStep(1)}><ChevronLeft className="h-4 w-4 mr-1" /> Back</Button>
-            <Button onClick={handleSendInvoice}
-              disabled={includedItems.length === 0 || totalAmount < 0.5 || sendLeisrInvoiceMutation.isPending}
-              className="bg-violet-600 hover:bg-violet-700 text-white">
-              {sendLeisrInvoiceMutation.isPending
-                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Sending...</>
-                : <><Send className="h-4 w-4 mr-1" /> Send Invoice (${totalAmount.toFixed(2)})</>}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={handlePreviewInvoice}
+                disabled={includedItems.length === 0 || totalAmount < 0.5 || isMutating}>
+                {previewLeisrInvoiceMutation.isPending
+                  ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Creating Draft...</>
+                  : <><ExternalLink className="h-4 w-4 mr-1" /> Preview in Stripe</>}
+              </Button>
+              <Button onClick={handleSendInvoice}
+                disabled={includedItems.length === 0 || totalAmount < 0.5 || isMutating}
+                className="bg-violet-600 hover:bg-violet-700 text-white">
+                {sendLeisrInvoiceMutation.isPending
+                  ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Sending...</>
+                  : <><Send className="h-4 w-4 mr-1" /> Send Invoice (${totalAmount.toFixed(2)})</>}
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -864,9 +935,21 @@ export default function LeisrBilling() {
                 <>
                   <CheckCircle2 className="h-12 w-12 text-emerald-500" />
                   <div>
-                    <h3 className="text-lg font-semibold">Invoice Sent!</h3>
-                    <p className="text-muted-foreground mt-1">${result.amount} invoice sent to Leisr Stays</p>
+                    <h3 className="text-lg font-semibold">
+                      {result.isDraft ? "Draft Invoice Created" : "Invoice Sent!"}
+                    </h3>
+                    <p className="text-muted-foreground mt-1">
+                      {result.isDraft
+                        ? `$${result.amount} draft created — review and send from Stripe`
+                        : `$${result.amount} invoice sent to Leisr Stays`}
+                    </p>
                   </div>
+                  {result.dashboardUrl && (
+                    <a href={result.dashboardUrl} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-sm text-violet-600 hover:underline font-medium">
+                      <ExternalLink className="h-3.5 w-3.5" /> Open in Stripe Dashboard
+                    </a>
+                  )}
                   {result.invoiceUrl && (
                     <a href={result.invoiceUrl} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 text-sm text-violet-600 hover:underline">
