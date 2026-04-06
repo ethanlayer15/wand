@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import {
   Loader2, Receipt, ChevronRight, ChevronLeft, Filter,
   Send, CheckCircle2, AlertTriangle, ExternalLink, Trash2, Eye,
+  ChevronDown, ChevronUp,
 } from "lucide-react";
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -25,16 +26,35 @@ type BreezewayTask = {
   created_at?: string;
 };
 
-/** Individual line item — one per task */
+type Flag = {
+  type: "duplicate" | "incomplete";
+  message: string;
+  taskId?: string;
+};
+
+/** A line item — either a grouped set of turnover cleans or an individual task */
 type LineItem = {
-  taskId: string;
-  taskName: string;
+  key: string;
+  isGroupedClean: boolean;
   propertyId: string;
   propertyName: string;
-  price: string;
-  included: boolean; // false = excluded from invoice
-  isTurnoverClean: boolean;
-  date: string;
+  label: string;
+  quantity: number;
+  unitPrice: string;
+  included: boolean;
+  taskIds: string[];
+  taskNames: string[];
+  dates: string[];
+  flags: Flag[];
+  // For grouped cleans: individual task details for expandable view
+  tasks?: {
+    taskId: string;
+    taskName: string;
+    date: string;
+    statusName: string;
+    flagged: boolean;
+    flagReason?: string;
+  }[];
 };
 
 const STEPS = ["Filter", "Review", "Line Items", "Send"];
@@ -42,12 +62,17 @@ const STEPS = ["Filter", "Review", "Line Items", "Send"];
 /** Check if a task name represents a turnover clean */
 function isTurnoverClean(taskName: string): boolean {
   const lower = taskName.toLowerCase();
-  return (
-    lower.includes("turnover clean") ||
-    lower.includes("same day turnover") ||
-    lower === "turnover" ||
-    lower.includes("turnover")
-  );
+  return lower.includes("turnover");
+}
+
+/** Format a date string to locale display */
+function fmtDate(d?: string): string {
+  if (!d) return "—";
+  try {
+    return new Date(d).toLocaleDateString();
+  } catch {
+    return d;
+  }
 }
 
 // ── Component ───────────────────────────────────────────────────────────
@@ -68,6 +93,7 @@ export default function LeisrBilling() {
   const [hasFetched, setHasFetched] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<{
     success: boolean;
     invoiceId?: string;
@@ -145,7 +171,7 @@ export default function LeisrBilling() {
     [rateMap]
   );
 
-  // ── Resolve property name ─────────────────────────────────────────────
+  // ── Property name lookup ──────────────────────────────────────────────
 
   const propertyNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -155,32 +181,155 @@ export default function LeisrBilling() {
     return map;
   }, [propertiesQuery.data]);
 
-  // ── Build individual line items from selected tasks ───────────────────
+  // ── Build line items: grouped turnover cleans + individual others ────
 
   const buildLineItems = useCallback(() => {
     const tasks = availableTasks.filter((t) => selectedTaskIds.has(String(t.id)));
-    const items: LineItem[] = tasks.map((task) => {
-      const propId = String(task.home_id);
-      const turnover = isTurnoverClean(task.name);
-      const rate = turnover ? getRate(propId, "turnover-clean") : "0.00";
-      const date = task.scheduled_date || task.created_at || "";
-      return {
-        taskId: String(task.id),
-        taskName: task.name,
-        propertyId: propId,
-        propertyName: propertyNameMap.get(propId) || `Property ${propId}`,
-        price: rate,
-        included: turnover, // auto-include turnover cleans, exclude others
-        isTurnoverClean: turnover,
-        date: date ? new Date(date).toLocaleDateString() : "—",
-      };
-    });
-    // Sort: turnover cleans first, then by property name
+
+    // Separate turnover cleans from everything else
+    const turnoverTasks: BreezewayTask[] = [];
+    const otherTasks: BreezewayTask[] = [];
+    for (const t of tasks) {
+      if (isTurnoverClean(t.name)) {
+        turnoverTasks.push(t);
+      } else {
+        otherTasks.push(t);
+      }
+    }
+
+    const items: LineItem[] = [];
+
+    // ── Group turnover cleans by property ──
+    const byProperty = new Map<number, BreezewayTask[]>();
+    for (const t of turnoverTasks) {
+      const arr = byProperty.get(t.home_id) || [];
+      arr.push(t);
+      byProperty.set(t.home_id, arr);
+    }
+
+    for (const [propId, propTasks] of byProperty) {
+      const propIdStr = String(propId);
+      const propName = propertyNameMap.get(propIdStr) || `Property ${propId}`;
+      const unitPrice = getRate(propIdStr, "turnover-clean");
+
+      // Detect flags
+      const flags: Flag[] = [];
+      const taskDetails: LineItem["tasks"] = [];
+
+      // Check for duplicates on same day
+      const dateMap = new Map<string, BreezewayTask[]>();
+      for (const t of propTasks) {
+        const dateKey = (t.scheduled_date || t.created_at || "").split("T")[0];
+        const arr = dateMap.get(dateKey) || [];
+        arr.push(t);
+        dateMap.set(dateKey, arr);
+      }
+
+      for (const [dateKey, dateTasks] of dateMap) {
+        const isDuplicate = dateTasks.length > 1;
+        if (isDuplicate) {
+          flags.push({
+            type: "duplicate",
+            message: `${dateTasks.length} turnover cleans on ${fmtDate(dateKey)} — possible duplicate`,
+          });
+        }
+        for (const t of dateTasks) {
+          const statusName = t.type_task_status?.name || "Unknown";
+          const stage = t.type_task_status?.stage || "";
+          const isIncomplete =
+            stage !== "finished" ||
+            /cancel|skip|void/i.test(statusName);
+
+          if (isIncomplete) {
+            flags.push({
+              type: "incomplete",
+              message: `"${t.name}" status: ${statusName} — may not have been completed`,
+              taskId: String(t.id),
+            });
+          }
+
+          taskDetails.push({
+            taskId: String(t.id),
+            taskName: t.name,
+            date: fmtDate(t.scheduled_date || t.created_at),
+            statusName,
+            flagged: isDuplicate || isIncomplete,
+            flagReason: isDuplicate
+              ? "Duplicate on same day"
+              : isIncomplete
+              ? `Status: ${statusName}`
+              : undefined,
+          });
+        }
+      }
+
+      // Sort task details by date
+      taskDetails.sort((a, b) => a.date.localeCompare(b.date));
+
+      const qty = propTasks.length;
+      const total = (parseFloat(unitPrice) * qty).toFixed(2);
+
+      items.push({
+        key: `clean:${propIdStr}`,
+        isGroupedClean: true,
+        propertyId: propIdStr,
+        propertyName: propName,
+        label: "Turnover Cleans",
+        quantity: qty,
+        unitPrice,
+        included: true,
+        taskIds: propTasks.map((t) => String(t.id)),
+        taskNames: propTasks.map((t) => t.name),
+        dates: propTasks.map((t) => fmtDate(t.scheduled_date || t.created_at)),
+        flags,
+        tasks: taskDetails,
+      });
+    }
+
+    // ── Individual non-turnover tasks ──
+    for (const task of otherTasks) {
+      const propIdStr = String(task.home_id);
+      const propName = propertyNameMap.get(propIdStr) || `Property ${task.home_id}`;
+      const statusName = task.type_task_status?.name || "Unknown";
+      const stage = task.type_task_status?.stage || "";
+      const flags: Flag[] = [];
+
+      const isIncomplete =
+        stage !== "finished" ||
+        /cancel|skip|void/i.test(statusName);
+
+      if (isIncomplete) {
+        flags.push({
+          type: "incomplete",
+          message: `Status: ${statusName} — may not have been completed`,
+          taskId: String(task.id),
+        });
+      }
+
+      items.push({
+        key: `task:${task.id}`,
+        isGroupedClean: false,
+        propertyId: propIdStr,
+        propertyName: propName,
+        label: task.name,
+        quantity: 1,
+        unitPrice: "0.00",
+        included: false, // non-turnover excluded by default
+        taskIds: [String(task.id)],
+        taskNames: [task.name],
+        dates: [fmtDate(task.scheduled_date || task.created_at)],
+        flags,
+      });
+    }
+
+    // Sort: grouped cleans first (by property), then individual tasks by property
     items.sort((a, b) => {
-      if (a.isTurnoverClean !== b.isTurnoverClean) return a.isTurnoverClean ? -1 : 1;
-      return a.propertyName.localeCompare(b.propertyName) || a.taskName.localeCompare(b.taskName);
+      if (a.isGroupedClean !== b.isGroupedClean) return a.isGroupedClean ? -1 : 1;
+      return a.propertyName.localeCompare(b.propertyName) || a.label.localeCompare(b.label);
     });
+
     setLineItems(items);
+    setExpandedGroups(new Set());
   }, [availableTasks, selectedTaskIds, getRate, propertyNameMap]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
@@ -207,30 +356,82 @@ export default function LeisrBilling() {
     });
   };
 
-  const updateLineItem = (taskId: string, field: "price" | "included", value: string | boolean) => {
+  const toggleExpanded = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const updateLineItem = (key: string, field: keyof LineItem, value: any) => {
     setLineItems((prev) =>
       prev.map((item) => {
-        if (item.taskId !== taskId) return item;
+        if (item.key !== key) return item;
+        if (field === "unitPrice") {
+          const newTotal = (parseFloat(value as string || "0") * item.quantity).toFixed(2);
+          return { ...item, unitPrice: value as string };
+        }
         return { ...item, [field]: value };
       })
     );
   };
 
-  const removeLineItem = (taskId: string) => {
-    setLineItems((prev) => prev.filter((item) => item.taskId !== taskId));
+  const removeLineItem = (key: string) => {
+    setLineItems((prev) => prev.filter((item) => item.key !== key));
+  };
+
+  /** Remove a single task from a grouped clean (reduces quantity) */
+  const removeTaskFromGroup = (groupKey: string, taskId: string) => {
+    setLineItems((prev) =>
+      prev.flatMap((item) => {
+        if (item.key !== groupKey) return [item];
+        const idx = item.taskIds.indexOf(taskId);
+        if (idx === -1) return [item];
+        // If only 1 task left, remove the whole group
+        if (item.taskIds.length <= 1) return [];
+        const newTaskIds = item.taskIds.filter((_, i) => i !== idx);
+        const newTaskNames = item.taskNames.filter((_, i) => i !== idx);
+        const newDates = item.dates.filter((_, i) => i !== idx);
+        const newTasks = item.tasks?.filter((t) => t.taskId !== taskId);
+        const newQty = newTaskIds.length;
+        // Recalculate flags
+        const newFlags = item.flags.filter((f) => f.taskId !== taskId);
+        return [{
+          ...item,
+          taskIds: newTaskIds,
+          taskNames: newTaskNames,
+          dates: newDates,
+          tasks: newTasks,
+          quantity: newQty,
+          flags: newFlags,
+        }];
+      })
+    );
   };
 
   const includedItems = useMemo(() => lineItems.filter((i) => i.included), [lineItems]);
   const excludedItems = useMemo(() => lineItems.filter((i) => !i.included), [lineItems]);
 
   const totalAmount = useMemo(
-    () => includedItems.reduce((sum, i) => sum + (parseFloat(i.price) || 0), 0),
+    () =>
+      includedItems.reduce(
+        (sum, i) => sum + (parseFloat(i.unitPrice) || 0) * i.quantity,
+        0
+      ),
     [includedItems]
   );
 
+  const flagCount = useMemo(
+    () => lineItems.reduce((sum, i) => sum + i.flags.length, 0),
+    [lineItems]
+  );
+
   const handleSendInvoice = async () => {
-    // Build per-task line items for the server — only included items with price > 0
-    const billableItems = includedItems.filter((i) => parseFloat(i.price) > 0);
+    const billableItems = includedItems.filter(
+      (i) => parseFloat(i.unitPrice) > 0
+    );
     if (billableItems.length === 0) {
       toast.error("No billable items with a price > $0");
       return;
@@ -240,11 +441,14 @@ export default function LeisrBilling() {
       const res = await sendLeisrInvoiceMutation.mutateAsync({
         lineItems: billableItems.map((item) => ({
           propertyName: item.propertyName,
-          quantity: 1,
-          unitPrice: item.price,
-          amount: item.price,
-          taskIds: [item.taskId],
-          taskNames: [item.taskName],
+          description: item.isGroupedClean
+            ? `${item.propertyName} × ${item.quantity} cleans`
+            : `${item.propertyName} — ${item.label}`,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          amount: (parseFloat(item.unitPrice) * item.quantity).toFixed(2),
+          taskIds: item.taskIds,
+          taskNames: item.taskNames,
         })),
         invoiceDescription,
       });
@@ -408,11 +612,7 @@ export default function LeisrBilling() {
                           {propertyNameMap.get(String(task.home_id)) || `#${task.home_id}`}
                         </td>
                         <td className="p-3 text-muted-foreground">
-                          {task.scheduled_date
-                            ? new Date(task.scheduled_date).toLocaleDateString()
-                            : task.created_at
-                            ? new Date(task.created_at).toLocaleDateString()
-                            : "—"}
+                          {fmtDate(task.scheduled_date || task.created_at)}
                         </td>
                         <td className="p-3">
                           <Badge variant="secondary" className="text-xs">
@@ -469,7 +669,7 @@ export default function LeisrBilling() {
               Leisr Invoice Line Items
             </CardTitle>
             <CardDescription>
-              Turnover Cleans are auto-priced from rate cards. Other tasks default to $0 — set a price to include them, or leave excluded.
+              Turnover cleans are grouped per property and auto-priced. Other tasks are individual line items — set a price to include them.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -481,9 +681,20 @@ export default function LeisrBilling() {
               />
             </div>
 
+            {/* Flag banner */}
+            {flagCount > 0 && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-semibold">{flagCount} item{flagCount > 1 ? "s" : ""} flagged for review</span>
+                  <span className="text-amber-600 ml-1">— check for duplicates or incomplete tasks before sending</span>
+                </div>
+              </div>
+            )}
+
             <Separator />
 
-            {/* Included line items */}
+            {/* ── Included line items ── */}
             <div>
               <h3 className="text-sm font-semibold mb-2 text-foreground">
                 Included ({includedItems.length})
@@ -492,72 +703,151 @@ export default function LeisrBilling() {
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50">
                     <tr>
-                      <th className="p-3 text-left">Task</th>
+                      <th className="p-3 text-left">Item</th>
                       <th className="p-3 text-left">Property</th>
-                      <th className="p-3 text-left w-24">Date</th>
-                      <th className="p-3 text-right w-28">Price</th>
+                      <th className="p-3 text-center w-16">Qty</th>
+                      <th className="p-3 text-right w-28">Unit Price</th>
+                      <th className="p-3 text-right w-24">Total</th>
                       <th className="p-3 w-20" />
                     </tr>
                   </thead>
                   <tbody>
-                    {includedItems.map((item) => (
-                      <tr key={item.taskId} className="border-t">
-                        <td className="p-3">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{item.taskName}</span>
-                            {item.isTurnoverClean && (
-                              <Badge className="bg-violet-100 text-violet-700 text-[10px] px-1.5 py-0">Clean</Badge>
-                            )}
-                            <a
-                              href={`https://app.breezeway.io/task/${item.taskId}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-muted-foreground hover:text-violet-600 transition-colors shrink-0"
-                              title="View in Breezeway"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          </div>
-                        </td>
-                        <td className="p-3 text-muted-foreground">{item.propertyName}</td>
-                        <td className="p-3 text-muted-foreground text-xs">{item.date}</td>
-                        <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <span className="text-muted-foreground text-xs">$</span>
-                            <Input
-                              value={item.price}
-                              onChange={(e) => updateLineItem(item.taskId, "price", e.target.value)}
-                              className="w-20 text-right h-7 text-sm"
-                            />
-                          </div>
-                        </td>
-                        <td className="p-3">
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 text-muted-foreground hover:text-amber-600"
-                              title="Exclude from invoice"
-                              onClick={() => updateLineItem(item.taskId, "included", false)}
-                            >
-                              <Eye className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 text-muted-foreground hover:text-red-500"
-                              title="Remove entirely"
-                              onClick={() => removeLineItem(item.taskId)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {includedItems.map((item) => {
+                      const isExpanded = expandedGroups.has(item.key);
+                      const lineTotal = (parseFloat(item.unitPrice) || 0) * item.quantity;
+                      return (
+                        <>
+                          <tr key={item.key} className="border-t">
+                            <td className="p-3">
+                              <div className="flex items-center gap-2">
+                                {item.isGroupedClean && item.tasks && item.tasks.length > 0 && (
+                                  <button
+                                    onClick={() => toggleExpanded(item.key)}
+                                    className="text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                  </button>
+                                )}
+                                <span className="font-medium">{item.label}</span>
+                                {item.isGroupedClean && (
+                                  <Badge className="bg-violet-100 text-violet-700 text-[10px] px-1.5 py-0">Grouped</Badge>
+                                )}
+                                {item.flags.length > 0 && (
+                                  <Badge className="bg-amber-100 text-amber-700 text-[10px] px-1.5 py-0 gap-0.5">
+                                    <AlertTriangle className="h-2.5 w-2.5" />
+                                    {item.flags.length}
+                                  </Badge>
+                                )}
+                              </div>
+                            </td>
+                            <td className="p-3 text-muted-foreground">{item.propertyName}</td>
+                            <td className="p-3 text-center font-medium">{item.quantity}</td>
+                            <td className="p-3 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <span className="text-muted-foreground text-xs">$</span>
+                                <Input
+                                  value={item.unitPrice}
+                                  onChange={(e) => updateLineItem(item.key, "unitPrice", e.target.value)}
+                                  className="w-20 text-right h-7 text-sm"
+                                />
+                              </div>
+                            </td>
+                            <td className="p-3 text-right font-medium">${lineTotal.toFixed(2)}</td>
+                            <td className="p-3">
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 text-muted-foreground hover:text-amber-600"
+                                  title="Exclude from invoice"
+                                  onClick={() => updateLineItem(item.key, "included", false)}
+                                >
+                                  <Eye className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 text-muted-foreground hover:text-red-500"
+                                  title="Remove entirely"
+                                  onClick={() => removeLineItem(item.key)}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+
+                          {/* Expanded task details for grouped cleans */}
+                          {isExpanded && item.tasks && item.tasks.map((t) => (
+                            <tr key={`${item.key}:${t.taskId}`} className="border-t bg-muted/20">
+                              <td className="p-2 pl-12" colSpan={2}>
+                                <div className="flex items-center gap-2 text-xs">
+                                  <span className={t.flagged ? "text-amber-700 font-medium" : "text-muted-foreground"}>
+                                    {t.taskName}
+                                  </span>
+                                  {t.flagged && t.flagReason && (
+                                    <Badge className="bg-amber-100 text-amber-700 text-[9px] px-1 py-0">
+                                      {t.flagReason}
+                                    </Badge>
+                                  )}
+                                  <a
+                                    href={`https://app.breezeway.io/task/${t.taskId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-muted-foreground hover:text-violet-600 transition-colors shrink-0"
+                                  >
+                                    <ExternalLink className="h-2.5 w-2.5" />
+                                  </a>
+                                </div>
+                              </td>
+                              <td className="p-2 text-center text-xs text-muted-foreground">{t.date}</td>
+                              <td className="p-2 text-right text-xs text-muted-foreground">{t.statusName}</td>
+                              <td className="p-2" />
+                              <td className="p-2">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-5 w-5 text-muted-foreground hover:text-red-500"
+                                  title="Remove this task from group"
+                                  onClick={() => removeTaskFromGroup(item.key, t.taskId)}
+                                >
+                                  <Trash2 className="h-2.5 w-2.5" />
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+
+                          {/* Show flag details inline when not expanded */}
+                          {!isExpanded && item.flags.length > 0 && (
+                            <tr key={`${item.key}:flags`} className="bg-amber-50/50">
+                              <td colSpan={6} className="px-3 py-1.5">
+                                <div className="flex flex-wrap gap-2">
+                                  {item.flags.map((f, fi) => (
+                                    <span key={fi} className="text-[11px] text-amber-700 flex items-center gap-1">
+                                      <AlertTriangle className="h-2.5 w-2.5" />
+                                      {f.message}
+                                      {f.taskId && (
+                                        <a
+                                          href={`https://app.breezeway.io/task/${f.taskId}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="hover:text-violet-600"
+                                        >
+                                          <ExternalLink className="h-2.5 w-2.5" />
+                                        </a>
+                                      )}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })}
                     {includedItems.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="p-6 text-center text-muted-foreground">
+                        <td colSpan={6} className="p-6 text-center text-muted-foreground">
                           No included items. Include tasks from the excluded list below.
                         </td>
                       </tr>
@@ -565,7 +855,7 @@ export default function LeisrBilling() {
                   </tbody>
                   <tfoot>
                     <tr className="border-t bg-muted/30">
-                      <td colSpan={3} className="p-3 text-right font-semibold">Total</td>
+                      <td colSpan={4} className="p-3 text-right font-semibold">Total</td>
                       <td className="p-3 text-right font-bold text-lg">${totalAmount.toFixed(2)}</td>
                       <td />
                     </tr>
@@ -574,7 +864,7 @@ export default function LeisrBilling() {
               </div>
             </div>
 
-            {/* Excluded line items */}
+            {/* ── Excluded line items ── */}
             {excludedItems.length > 0 && (
               <div>
                 <h3 className="text-sm font-semibold mb-2 text-muted-foreground">
@@ -584,29 +874,35 @@ export default function LeisrBilling() {
                   <table className="w-full text-sm">
                     <tbody>
                       {excludedItems.map((item) => (
-                        <tr key={item.taskId} className="border-t first:border-t-0">
+                        <tr key={item.key} className="border-t first:border-t-0">
                           <td className="p-2.5 pl-3">
                             <div className="flex items-center gap-2 text-muted-foreground">
-                              <span>{item.taskName}</span>
-                              <a
-                                href={`https://app.breezeway.io/task/${item.taskId}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="hover:text-violet-600 transition-colors shrink-0"
-                                title="View in Breezeway"
-                              >
-                                <ExternalLink className="h-3 w-3" />
-                              </a>
+                              <span>{item.label}</span>
+                              {item.flags.length > 0 && (
+                                <Badge className="bg-amber-100 text-amber-700 text-[9px] px-1 py-0">
+                                  <AlertTriangle className="h-2.5 w-2.5" />
+                                </Badge>
+                              )}
+                              {item.taskIds.length === 1 && (
+                                <a
+                                  href={`https://app.breezeway.io/task/${item.taskIds[0]}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="hover:text-violet-600 transition-colors shrink-0"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                </a>
+                              )}
                             </div>
                           </td>
                           <td className="p-2.5 text-muted-foreground text-xs">{item.propertyName}</td>
-                          <td className="p-2.5 text-muted-foreground text-xs">{item.date}</td>
+                          <td className="p-2.5 text-muted-foreground text-xs">{item.dates[0]}</td>
                           <td className="p-2.5 text-right">
                             <div className="flex items-center justify-end gap-1">
                               <span className="text-muted-foreground text-xs">$</span>
                               <Input
-                                value={item.price}
-                                onChange={(e) => updateLineItem(item.taskId, "price", e.target.value)}
+                                value={item.unitPrice}
+                                onChange={(e) => updateLineItem(item.key, "unitPrice", e.target.value)}
                                 className="w-20 text-right h-7 text-sm"
                                 placeholder="0.00"
                               />
@@ -617,7 +913,7 @@ export default function LeisrBilling() {
                               variant="outline"
                               size="sm"
                               className="h-6 text-xs px-2"
-                              onClick={() => updateLineItem(item.taskId, "included", true)}
+                              onClick={() => updateLineItem(item.key, "included", true)}
                             >
                               Include
                             </Button>

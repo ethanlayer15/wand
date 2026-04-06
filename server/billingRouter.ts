@@ -415,6 +415,7 @@ export const billingRouter = router({
         lineItems: z.array(
           z.object({
             propertyName: z.string(),
+            description: z.string().optional(), // custom Stripe line description
             quantity: z.number(),
             unitPrice: z.string(), // decimal string e.g. "150.00"
             amount: z.string(),    // total = qty × unitPrice
@@ -442,7 +443,11 @@ export const billingRouter = router({
 
       // 2. Build Stripe line items
       const stripeLineItems = input.lineItems.map((item) => ({
-        description: `${item.propertyName} × ${item.quantity} clean${item.quantity > 1 ? "s" : ""}`,
+        description:
+          item.description ||
+          (item.quantity > 1
+            ? `${item.propertyName} × ${item.quantity} cleans`
+            : `${item.propertyName} — ${item.taskNames[0] || "Service"}`),
         amountCents: Math.round(parseFloat(item.amount) * 100),
       }));
 
