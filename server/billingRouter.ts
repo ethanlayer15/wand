@@ -254,6 +254,87 @@ export const billingRouter = router({
         await db.delete(rateCard).where(eq(rateCard.id, input.id));
         return { success: true };
       }),
+
+    /** Bulk upsert rate cards by fuzzy-matching property names */
+    bulkUpsert: managerProcedure
+      .input(
+        z.object({
+          entries: z.array(
+            z.object({
+              propertySearch: z.string(), // fuzzy search term
+              taskType: z.string().default("turnover-clean"),
+              amount: z.string(), // decimal string e.g. "195.00"
+            })
+          ),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+
+        // Fetch all properties with canonical names
+        const props = await db
+          .select({
+            breezewayId: breezewayPropertiesTable.breezewayId,
+            bwName: breezewayPropertiesTable.name,
+            internalName: listings.internalName,
+            listingName: listings.name,
+          })
+          .from(breezewayPropertiesTable)
+          .leftJoin(listings, eq(breezewayPropertiesTable.referencePropertyId, listings.hostawayId));
+
+        const results: { search: string; matched: string[]; created: number; updated: number; errors: string[] }[] = [];
+
+        for (const entry of input.entries) {
+          const lower = entry.propertySearch.toLowerCase();
+          const matched: string[] = [];
+          let created = 0;
+          let updated = 0;
+          const errors: string[] = [];
+
+          // Find all properties matching the search term
+          const matches = props.filter((p) => {
+            const name = (p.internalName || p.listingName || p.bwName || "").toLowerCase();
+            return name.includes(lower);
+          });
+
+          if (matches.length === 0) {
+            errors.push(`No property found matching "${entry.propertySearch}"`);
+            results.push({ search: entry.propertySearch, matched, created, updated, errors });
+            continue;
+          }
+
+          for (const match of matches) {
+            const propId = String(match.breezewayId);
+            const propName = match.internalName || match.listingName || match.bwName || "";
+            matched.push(propName);
+
+            const existing = await db
+              .select()
+              .from(rateCard)
+              .where(and(eq(rateCard.propertyId, propId), eq(rateCard.taskType, entry.taskType)))
+              .limit(1);
+
+            if (existing.length > 0) {
+              await db
+                .update(rateCard)
+                .set({ amount: entry.amount, propertyName: propName, matchConfidence: "manual" })
+                .where(eq(rateCard.id, existing[0].id));
+              updated++;
+            } else {
+              await db.insert(rateCard).values({
+                propertyId: propId, propertyName: propName,
+                taskType: entry.taskType, amount: entry.amount, matchConfidence: "manual",
+              });
+              created++;
+            }
+          }
+
+          results.push({ search: entry.propertySearch, matched, created, updated, errors });
+        }
+
+        return { results };
+      }),
   }),
 
   // ── Auto-Map (fuzzy match Breezeway properties → Stripe customers) ──
