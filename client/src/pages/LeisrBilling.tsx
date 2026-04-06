@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   Loader2, Receipt, ChevronRight, ChevronLeft, Filter,
-  Send, CheckCircle2, AlertTriangle, ExternalLink, Trash2,
+  Send, CheckCircle2, AlertTriangle, ExternalLink, Trash2, Eye,
 } from "lucide-react";
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -25,16 +25,30 @@ type BreezewayTask = {
   created_at?: string;
 };
 
-type PropertyGroup = {
-  propertyName: string;
+/** Individual line item — one per task */
+type LineItem = {
+  taskId: string;
+  taskName: string;
   propertyId: string;
-  tasks: BreezewayTask[];
-  quantity: number;
-  unitPrice: string;
-  amount: string;
+  propertyName: string;
+  price: string;
+  included: boolean; // false = excluded from invoice
+  isTurnoverClean: boolean;
+  date: string;
 };
 
 const STEPS = ["Filter", "Review", "Line Items", "Send"];
+
+/** Check if a task name represents a turnover clean */
+function isTurnoverClean(taskName: string): boolean {
+  const lower = taskName.toLowerCase();
+  return (
+    lower.includes("turnover clean") ||
+    lower.includes("same day turnover") ||
+    lower === "turnover" ||
+    lower.includes("turnover")
+  );
+}
 
 // ── Component ───────────────────────────────────────────────────────────
 
@@ -42,7 +56,7 @@ export default function LeisrBilling() {
   const [step, setStep] = useState(0);
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
-    d.setDate(1); // first of current month
+    d.setDate(1);
     return d.toISOString().split("T")[0];
   });
   const [endDate, setEndDate] = useState(() => new Date().toISOString().split("T")[0]);
@@ -53,7 +67,7 @@ export default function LeisrBilling() {
   });
   const [hasFetched, setHasFetched] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
-  const [propertyGroups, setPropertyGroups] = useState<PropertyGroup[]>([]);
+  const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [result, setResult] = useState<{
     success: boolean;
     invoiceId?: string;
@@ -102,7 +116,6 @@ export default function LeisrBilling() {
     return new Set(records.map((r: any) => r.breezewayTaskId));
   }, [billingRecordsQuery.data]);
 
-  // Filter out already-billed tasks
   const availableTasks = useMemo(() => {
     const tasks = (tasksQuery.data?.results || []) as BreezewayTask[];
     return tasks.filter((t) => !billedTaskIds.has(String(t.id)));
@@ -116,7 +129,6 @@ export default function LeisrBilling() {
     const map = new Map<string, string>();
     for (const rc of rateCardsQuery.data || []) {
       map.set(`${rc.propertyId}:${rc.taskType}`, rc.amount);
-      // Also store a fallback with just propertyId
       if (!map.has(rc.propertyId)) map.set(rc.propertyId, rc.amount);
     }
     return map;
@@ -143,35 +155,32 @@ export default function LeisrBilling() {
     return map;
   }, [propertiesQuery.data]);
 
-  // ── Build property groups from selected tasks ─────────────────────────
+  // ── Build individual line items from selected tasks ───────────────────
 
-  const buildPropertyGroups = useCallback(() => {
+  const buildLineItems = useCallback(() => {
     const tasks = availableTasks.filter((t) => selectedTaskIds.has(String(t.id)));
-    const grouped = new Map<string, BreezewayTask[]>();
-
-    for (const task of tasks) {
-      const key = String(task.home_id);
-      const existing = grouped.get(key) || [];
-      existing.push(task);
-      grouped.set(key, existing);
-    }
-
-    const groups: PropertyGroup[] = [];
-    for (const [propertyId, propertyTasks] of grouped) {
-      const rate = getRate(propertyId, "turnover-clean");
-      const qty = propertyTasks.length;
-      groups.push({
-        propertyId,
-        propertyName: propertyNameMap.get(propertyId) || `Property ${propertyId}`,
-        tasks: propertyTasks,
-        quantity: qty,
-        unitPrice: rate,
-        amount: (qty * parseFloat(rate || "0")).toFixed(2),
-      });
-    }
-
-    groups.sort((a, b) => a.propertyName.localeCompare(b.propertyName));
-    setPropertyGroups(groups);
+    const items: LineItem[] = tasks.map((task) => {
+      const propId = String(task.home_id);
+      const turnover = isTurnoverClean(task.name);
+      const rate = turnover ? getRate(propId, "turnover-clean") : "0.00";
+      const date = task.scheduled_date || task.created_at || "";
+      return {
+        taskId: String(task.id),
+        taskName: task.name,
+        propertyId: propId,
+        propertyName: propertyNameMap.get(propId) || `Property ${propId}`,
+        price: rate,
+        included: turnover, // auto-include turnover cleans, exclude others
+        isTurnoverClean: turnover,
+        date: date ? new Date(date).toLocaleDateString() : "—",
+      };
+    });
+    // Sort: turnover cleans first, then by property name
+    items.sort((a, b) => {
+      if (a.isTurnoverClean !== b.isTurnoverClean) return a.isTurnoverClean ? -1 : 1;
+      return a.propertyName.localeCompare(b.propertyName) || a.taskName.localeCompare(b.taskName);
+    });
+    setLineItems(items);
   }, [availableTasks, selectedTaskIds, getRate, propertyNameMap]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
@@ -198,36 +207,44 @@ export default function LeisrBilling() {
     });
   };
 
-  const updateGroupField = (propertyId: string, field: "unitPrice" | "quantity", value: string) => {
-    setPropertyGroups((prev) =>
-      prev.map((g) => {
-        if (g.propertyId !== propertyId) return g;
-        const updated = { ...g, [field]: field === "quantity" ? parseInt(value) || 0 : value };
-        updated.amount = (updated.quantity * parseFloat(updated.unitPrice || "0")).toFixed(2);
-        return updated;
+  const updateLineItem = (taskId: string, field: "price" | "included", value: string | boolean) => {
+    setLineItems((prev) =>
+      prev.map((item) => {
+        if (item.taskId !== taskId) return item;
+        return { ...item, [field]: value };
       })
     );
   };
 
-  const removeGroup = (propertyId: string) => {
-    setPropertyGroups((prev) => prev.filter((g) => g.propertyId !== propertyId));
+  const removeLineItem = (taskId: string) => {
+    setLineItems((prev) => prev.filter((item) => item.taskId !== taskId));
   };
 
+  const includedItems = useMemo(() => lineItems.filter((i) => i.included), [lineItems]);
+  const excludedItems = useMemo(() => lineItems.filter((i) => !i.included), [lineItems]);
+
   const totalAmount = useMemo(
-    () => propertyGroups.reduce((sum, g) => sum + parseFloat(g.amount || "0"), 0),
-    [propertyGroups]
+    () => includedItems.reduce((sum, i) => sum + (parseFloat(i.price) || 0), 0),
+    [includedItems]
   );
 
   const handleSendInvoice = async () => {
+    // Build per-task line items for the server — only included items with price > 0
+    const billableItems = includedItems.filter((i) => parseFloat(i.price) > 0);
+    if (billableItems.length === 0) {
+      toast.error("No billable items with a price > $0");
+      return;
+    }
+
     try {
       const res = await sendLeisrInvoiceMutation.mutateAsync({
-        lineItems: propertyGroups.map((g) => ({
-          propertyName: g.propertyName,
-          quantity: g.quantity,
-          unitPrice: g.unitPrice,
-          amount: g.amount,
-          taskIds: g.tasks.map((t) => String(t.id)),
-          taskNames: g.tasks.map((t) => t.name),
+        lineItems: billableItems.map((item) => ({
+          propertyName: item.propertyName,
+          quantity: 1,
+          unitPrice: item.price,
+          amount: item.price,
+          taskIds: [item.taskId],
+          taskNames: [item.taskName],
         })),
         invoiceDescription,
       });
@@ -371,6 +388,7 @@ export default function LeisrBilling() {
                     <th className="p-3 text-left">Property</th>
                     <th className="p-3 text-left">Date</th>
                     <th className="p-3 text-left">Status</th>
+                    <th className="p-3 w-10" />
                   </tr>
                 </thead>
                 <tbody>
@@ -401,12 +419,23 @@ export default function LeisrBilling() {
                             {task.type_task_status?.name || "Unknown"}
                           </Badge>
                         </td>
+                        <td className="p-3" onClick={(e) => e.stopPropagation()}>
+                          <a
+                            href={`https://app.breezeway.io/task/${task.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-muted-foreground hover:text-violet-600 transition-colors"
+                            title="View in Breezeway"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        </td>
                       </tr>
                     );
                   })}
                   {availableTasks.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-muted-foreground">
+                      <td colSpan={6} className="p-8 text-center text-muted-foreground">
                         No tasks available for billing in this date range
                       </td>
                     </tr>
@@ -420,7 +449,7 @@ export default function LeisrBilling() {
                 <ChevronLeft className="h-4 w-4 mr-1" /> Back
               </Button>
               <Button
-                onClick={() => { buildPropertyGroups(); setStep(2); }}
+                onClick={() => { buildLineItems(); setStep(2); }}
                 disabled={selectedTaskIds.size === 0}
               >
                 Build Line Items ({selectedTaskIds.size} tasks)
@@ -437,10 +466,10 @@ export default function LeisrBilling() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Receipt className="h-5 w-5" />
-              Leisr Invoice Preview
+              Leisr Invoice Line Items
             </CardTitle>
             <CardDescription>
-              Review line items before sending. Prices are from your rate card.
+              Turnover Cleans are auto-priced from rate cards. Other tasks default to $0 — set a price to include them, or leave excluded.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -454,75 +483,150 @@ export default function LeisrBilling() {
 
             <Separator />
 
-            <div className="border rounded-md overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="p-3 text-left">Property</th>
-                    <th className="p-3 text-center w-20">Qty</th>
-                    <th className="p-3 text-right w-28">Rate</th>
-                    <th className="p-3 text-right w-28">Total</th>
-                    <th className="p-3 w-10" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {propertyGroups.map((group) => (
-                    <tr key={group.propertyId} className="border-t">
-                      <td className="p-3">
-                        <div className="font-medium">{group.propertyName}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {group.tasks.length} task{group.tasks.length !== 1 ? "s" : ""}
-                        </div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <Input
-                          type="number"
-                          min={1}
-                          value={group.quantity}
-                          onChange={(e) => updateGroupField(group.propertyId, "quantity", e.target.value)}
-                          className="w-16 text-center mx-auto h-8"
-                        />
-                      </td>
-                      <td className="p-3 text-right">
-                        <Input
-                          value={group.unitPrice}
-                          onChange={(e) => updateGroupField(group.propertyId, "unitPrice", e.target.value)}
-                          className="w-24 text-right ml-auto h-8"
-                        />
-                      </td>
-                      <td className="p-3 text-right font-medium">
-                        ${parseFloat(group.amount).toFixed(2)}
-                      </td>
-                      <td className="p-3">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-muted-foreground hover:text-red-500"
-                          onClick={() => removeGroup(group.propertyId)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </td>
+            {/* Included line items */}
+            <div>
+              <h3 className="text-sm font-semibold mb-2 text-foreground">
+                Included ({includedItems.length})
+              </h3>
+              <div className="border rounded-md overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50">
+                    <tr>
+                      <th className="p-3 text-left">Task</th>
+                      <th className="p-3 text-left">Property</th>
+                      <th className="p-3 text-left w-24">Date</th>
+                      <th className="p-3 text-right w-28">Price</th>
+                      <th className="p-3 w-20" />
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t bg-muted/30">
-                    <td colSpan={3} className="p-3 text-right font-semibold">
-                      Total
-                    </td>
-                    <td className="p-3 text-right font-bold text-lg">
-                      ${totalAmount.toFixed(2)}
-                    </td>
-                    <td />
-                  </tr>
-                </tfoot>
-              </table>
+                  </thead>
+                  <tbody>
+                    {includedItems.map((item) => (
+                      <tr key={item.taskId} className="border-t">
+                        <td className="p-3">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{item.taskName}</span>
+                            {item.isTurnoverClean && (
+                              <Badge className="bg-violet-100 text-violet-700 text-[10px] px-1.5 py-0">Clean</Badge>
+                            )}
+                            <a
+                              href={`https://app.breezeway.io/task/${item.taskId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-muted-foreground hover:text-violet-600 transition-colors shrink-0"
+                              title="View in Breezeway"
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          </div>
+                        </td>
+                        <td className="p-3 text-muted-foreground">{item.propertyName}</td>
+                        <td className="p-3 text-muted-foreground text-xs">{item.date}</td>
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <span className="text-muted-foreground text-xs">$</span>
+                            <Input
+                              value={item.price}
+                              onChange={(e) => updateLineItem(item.taskId, "price", e.target.value)}
+                              className="w-20 text-right h-7 text-sm"
+                            />
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-muted-foreground hover:text-amber-600"
+                              title="Exclude from invoice"
+                              onClick={() => updateLineItem(item.taskId, "included", false)}
+                            >
+                              <Eye className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-muted-foreground hover:text-red-500"
+                              title="Remove entirely"
+                              onClick={() => removeLineItem(item.taskId)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {includedItems.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="p-6 text-center text-muted-foreground">
+                          No included items. Include tasks from the excluded list below.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t bg-muted/30">
+                      <td colSpan={3} className="p-3 text-right font-semibold">Total</td>
+                      <td className="p-3 text-right font-bold text-lg">${totalAmount.toFixed(2)}</td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             </div>
 
-            {propertyGroups.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                No line items. Go back and select tasks.
+            {/* Excluded line items */}
+            {excludedItems.length > 0 && (
+              <div>
+                <h3 className="text-sm font-semibold mb-2 text-muted-foreground">
+                  Excluded ({excludedItems.length})
+                </h3>
+                <div className="border rounded-md overflow-hidden border-dashed">
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {excludedItems.map((item) => (
+                        <tr key={item.taskId} className="border-t first:border-t-0">
+                          <td className="p-2.5 pl-3">
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span>{item.taskName}</span>
+                              <a
+                                href={`https://app.breezeway.io/task/${item.taskId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="hover:text-violet-600 transition-colors shrink-0"
+                                title="View in Breezeway"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            </div>
+                          </td>
+                          <td className="p-2.5 text-muted-foreground text-xs">{item.propertyName}</td>
+                          <td className="p-2.5 text-muted-foreground text-xs">{item.date}</td>
+                          <td className="p-2.5 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <span className="text-muted-foreground text-xs">$</span>
+                              <Input
+                                value={item.price}
+                                onChange={(e) => updateLineItem(item.taskId, "price", e.target.value)}
+                                className="w-20 text-right h-7 text-sm"
+                                placeholder="0.00"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-2.5 w-16">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs px-2"
+                              onClick={() => updateLineItem(item.taskId, "included", true)}
+                            >
+                              Include
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -532,7 +636,7 @@ export default function LeisrBilling() {
               </Button>
               <Button
                 onClick={handleSendInvoice}
-                disabled={propertyGroups.length === 0 || totalAmount < 0.5 || sendLeisrInvoiceMutation.isPending}
+                disabled={includedItems.length === 0 || totalAmount < 0.5 || sendLeisrInvoiceMutation.isPending}
                 className="bg-violet-600 hover:bg-violet-700 text-white"
               >
                 {sendLeisrInvoiceMutation.isPending ? (
