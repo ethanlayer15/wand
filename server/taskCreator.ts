@@ -30,12 +30,12 @@ async function getDb() {
   return drizzle({ connection: { uri: ENV.databaseUrl } });
 }
 
-/** Categories + sentiments that should trigger task creation */
+/** Categories that should trigger task creation.
+ *  Only real property issues — NOT questions, compliments, or vague complaints. */
 const TASK_TRIGGER_CATEGORIES = new Set([
   "maintenance",
   "cleaning",
   "improvement",
-  "complaint",
 ]);
 
 /**
@@ -85,12 +85,10 @@ function shouldCreateTask(msg: GuestMessage): boolean {
   if (!msg.aiAnalyzed) return false;
   // Only create tasks from incoming guest messages, never from host-sent messages
   if (msg.isIncoming === false) return false;
-  // Create task for actionable categories
+  // Create task for actionable categories (maintenance, cleaning, improvement)
   if (msg.aiCategory && TASK_TRIGGER_CATEGORIES.has(msg.aiCategory)) return true;
-  // Create task for negative sentiment regardless of category
-  if (msg.aiSentiment === "negative") return true;
-  // Create task for high/critical urgency
-  if (msg.aiUrgency === "high" || msg.aiUrgency === "critical") return true;
+  // Create task for critical urgency only (escalation situations)
+  if (msg.aiUrgency === "critical") return true;
 
   // KEYWORD OVERRIDE: If AI classified as "question" or "other" but the message
   // body contains maintenance-related keywords, override and create a task.

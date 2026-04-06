@@ -307,15 +307,17 @@ Rules:
 
 IMPORTANT CLASSIFICATION RULES:
 
-1. SOFT COMPLAINTS DISGUISED AS QUESTIONS: If a guest asks a question that implies something is broken, missing, or not working (e.g., "Is the AC supposed to sound like that?", "Is there usually hot water?", "Where's the closest grocery store?" implying supplies are missing), classify as "complaint" or "maintenance" — NOT "question". The question format is just politeness; the underlying issue is real.
+1. QUESTIONS ARE QUESTIONS: If a guest is simply asking a question — about checkout time, directions, recommendations, trash disposal, local attractions, how something works, etc. — classify as "question" with "low" urgency. These are routine guest communications that the team answers in real time. Do NOT reclassify questions as complaints or maintenance unless the guest is clearly reporting something broken or not working.
 
-2. IMPROVEMENT SUGGESTIONS: If a guest says "it would be nice if...", "the only thing missing is...", "I wish there was...", "a suggestion would be...", or similar phrasing, classify as "improvement" with at least "medium" urgency.
+2. ONLY FLAG REAL PROBLEMS: Only classify as "maintenance", "cleaning", or "complaint" when the guest is reporting an actual issue — something broken, dirty, not working, missing, or malfunctioning. Examples: "The AC isn't cooling", "There's a leak under the sink", "The bathroom wasn't clean". NOT: "Where's the trash can?", "What time is checkout?", "Can you recommend restaurants?"
 
-3. EXPERIENCE FRICTION SIGNALS: Messages about late check-in issues, trouble with lockbox/door codes, parking confusion, wifi problems, difficulty finding the property, unclear instructions — even if the guest isn't complaining — classify as "maintenance" or "complaint" with at least "medium" urgency. These are operational problems that need fixing.
+3. IMPROVEMENT SUGGESTIONS: If a guest says "it would be nice if...", "the only thing missing is...", "I wish there was...", or similar phrasing, classify as "improvement" with "low" urgency.
 
-4. ESCALATION DETECTION: If the guest mentions "refund", "leaving early", "calling Airbnb", "calling VRBO", "contacting support", "disappointed", "unacceptable", "worst", "disgusting", "health department", "unsafe", or similar escalation language, ALWAYS set urgency to "critical" regardless of other factors. These require immediate attention.
+4. ESCALATION DETECTION: If the guest mentions "refund", "leaving early", "calling Airbnb", "calling VRBO", "contacting support", "disappointed", "unacceptable", "worst", "disgusting", "health department", "unsafe", or similar escalation language, ALWAYS set urgency to "critical" regardless of other factors.
 
-5. APPLIANCE/SYSTEM ISSUES: Any mention of AC, heating, hot water, plumbing, electrical, appliance not working, strange noises, or temperature problems should be classified as "maintenance" with at least "high" urgency — guests in the property need these resolved same-day.`;
+5. APPLIANCE/SYSTEM ISSUES: Any mention of AC, heating, hot water, plumbing, electrical, appliance not working, strange noises, or temperature problems should be classified as "maintenance" with at least "high" urgency — these are real problems that need same-day resolution.
+
+6. WHEN IN DOUBT — CLASSIFY AS "question" WITH "low" URGENCY. It is far better to miss a borderline case than to create unnecessary tasks from routine guest communications.`;
 
 export async function analyzeGuestMessages(batchSize = 20): Promise<{
   analyzed: number;
