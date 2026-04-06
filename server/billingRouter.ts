@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, managerProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import {
   customerMapping,
@@ -24,7 +24,7 @@ export const billingRouter = router({
   // ── Customer Mapping ──────────────────────────────────────────────────
 
   customerMappings: router({
-    list: publicProcedure.query(async () => {
+    list: protectedProcedure.query(async () => {
       const db = await getDb();
       if (!db) return [];
       return db
@@ -33,7 +33,7 @@ export const billingRouter = router({
         .orderBy(customerMapping.breezewayOwnerName);
     }),
 
-    upsert: publicProcedure
+    upsert: managerProcedure
       .input(
         z.object({
           breezewayOwnerId: z.string(),
@@ -67,7 +67,7 @@ export const billingRouter = router({
         return { success: true };
       }),
 
-    delete: publicProcedure
+    delete: managerProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         const db = await getDb();
@@ -79,7 +79,7 @@ export const billingRouter = router({
 
   // ── Breezeway Properties (for owner dropdown) ───────────────────────
 
-  breezewayProperties: publicProcedure.query(async () => {
+  breezewayProperties: protectedProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
     // Join breezewayProperties with listings on referencePropertyId = hostawayId
@@ -115,7 +115,7 @@ export const billingRouter = router({
 
   // ── Property Tags (distinct list for filter dropdown) ─────────────────
 
-  propertyTags: publicProcedure.query(async () => {
+  propertyTags: protectedProcedure.query(async () => {
     const props = await getBreezewayProperties();
     const tagSet = new Set<string>();
     for (const p of props) {
@@ -132,7 +132,7 @@ export const billingRouter = router({
   // ── Stripe Customers ──────────────────────────────────────────────────
 
   stripeCustomers: router({
-    list: publicProcedure.query(async () => {
+    list: protectedProcedure.query(async () => {
       try {
         const customers = await listStripeCustomers();
         return customers.map((c) => ({
@@ -147,7 +147,7 @@ export const billingRouter = router({
       }
     }),
 
-    checkPaymentMethod: publicProcedure
+    checkPaymentMethod: protectedProcedure
       .input(z.object({ customerId: z.string() }))
       .query(async ({ input }) => {
         return { hasPaymentMethod: await customerHasPaymentMethod(input.customerId) };
@@ -157,13 +157,13 @@ export const billingRouter = router({
   // ── Rate Card ─────────────────────────────────────────────────────────
 
   rateCards: router({
-    list: publicProcedure.query(async () => {
+    list: protectedProcedure.query(async () => {
       const db = await getDb();
       if (!db) return [];
       return db.select().from(rateCard).orderBy(rateCard.propertyId, rateCard.taskType);
     }),
 
-    byProperty: publicProcedure
+    byProperty: protectedProcedure
       .input(z.object({ propertyId: z.string() }))
       .query(async ({ input }) => {
         const db = await getDb();
@@ -174,7 +174,7 @@ export const billingRouter = router({
           .where(eq(rateCard.propertyId, input.propertyId));
       }),
 
-    upsert: publicProcedure
+    upsert: managerProcedure
       .input(
         z.object({
           id: z.number().optional(), // if provided, update by ID
@@ -245,7 +245,7 @@ export const billingRouter = router({
         return { success: true };
       }),
 
-    delete: publicProcedure
+    delete: managerProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         const db = await getDb();
@@ -257,7 +257,7 @@ export const billingRouter = router({
 
   // ── Auto-Map (fuzzy match Breezeway properties → Stripe customers) ──
 
-  autoMap: publicProcedure.query(async () => {
+  autoMap: protectedProcedure.query(async () => {
     // 1. Fetch Breezeway properties from DB
     const props = await getBreezewayProperties();
     const breezewayProps = props.map((p) => ({
@@ -300,7 +300,7 @@ export const billingRouter = router({
   // ── Billing Records ───────────────────────────────────────────────────
 
   records: router({
-    list: publicProcedure.query(async () => {
+    list: protectedProcedure.query(async () => {
       const db = await getDb();
       if (!db) return [];
       return db
@@ -309,7 +309,7 @@ export const billingRouter = router({
         .orderBy(desc(billingRecord.billedAt));
     }),
 
-    byTaskIds: publicProcedure
+    byTaskIds: protectedProcedure
       .input(z.object({ taskIds: z.array(z.string()) }))
       .query(async ({ input }) => {
         const db = await getDb();
@@ -324,7 +324,7 @@ export const billingRouter = router({
 
   // ── Billing Actions ───────────────────────────────────────────────────
 
-  chargeCard: publicProcedure
+  chargeCard: managerProcedure
     .input(
       z.object({
         stripeCustomerId: z.string(),
@@ -409,7 +409,7 @@ export const billingRouter = router({
 
   // ── Leisr Billing: Consolidated Invoice ───────────────────────────────
 
-  sendLeisrInvoice: publicProcedure
+  sendLeisrInvoice: managerProcedure
     .input(
       z.object({
         lineItems: z.array(
@@ -513,7 +513,7 @@ export const billingRouter = router({
       };
     }),
 
-  sendInvoice: publicProcedure
+  sendInvoice: managerProcedure
     .input(
       z.object({
         stripeCustomerId: z.string(),
