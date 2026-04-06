@@ -291,8 +291,7 @@ function DashboardLayoutContent({
 
   return (
     <>
-      <div className="relative shrink-0" ref={sidebarRef}>
-        <Sidebar collapsible="icon" className="border-r-0 bg-sidebar">
+      <Sidebar ref={sidebarRef} collapsible="icon" className="border-r-0 bg-sidebar">
           {/* Header: Logo */}
           <SidebarHeader className="h-14 justify-center px-3">
             <button
@@ -438,16 +437,6 @@ function DashboardLayoutContent({
             </div>
           </SidebarFooter>
         </Sidebar>
-
-        {/* Resize handle */}
-        <div
-          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-primary/30 transition-colors ${isCollapsed ? "hidden" : ""}`}
-          onMouseDown={() => {
-            if (!isCollapsed) setIsResizing(true);
-          }}
-          style={{ zIndex: 50 }}
-        />
-      </div>
 
       <SidebarInset className="bg-background">
         {isMobile && (
