@@ -291,7 +291,7 @@ function DashboardLayoutContent({
 
   return (
     <>
-      <div className="relative" ref={sidebarRef}>
+      <div className="relative shrink-0" ref={sidebarRef}>
         <Sidebar collapsible="icon" className="border-r-0 bg-sidebar">
           {/* Header: Logo */}
           <SidebarHeader className="h-14 justify-center px-3">
@@ -449,13 +449,13 @@ function DashboardLayoutContent({
         />
       </div>
 
-      <SidebarInset className="bg-background min-w-0 overflow-hidden">
+      <SidebarInset className="bg-background">
         {isMobile && (
           <div className="flex border-b h-14 items-center px-4 bg-background sticky top-0 z-40">
             <SidebarTrigger className="h-9 w-9 rounded-lg" />
           </div>
         )}
-        <main className="flex-1 min-w-0 overflow-x-auto">{children}</main>
+        <main className="min-w-0 overflow-x-auto">{children}</main>
       </SidebarInset>
     </>
   );
