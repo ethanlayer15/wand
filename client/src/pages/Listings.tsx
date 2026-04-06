@@ -522,7 +522,7 @@ export default function Listings() {
     ) || [];
 
   return (
-    <div className="space-y-6 p-6 max-w-7xl">
+    <div className="space-y-6 p-6 w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col gap-4">
         <div>

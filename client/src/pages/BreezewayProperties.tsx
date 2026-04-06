@@ -8,7 +8,7 @@ export default function BreezewayProperties() {
     trpc.breezeway.properties.list.useQuery();
 
   return (
-    <div className="space-y-6 p-6 max-w-7xl">
+    <div className="space-y-6 p-6 w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col gap-2">
         <h1 className="wand-page-title">Breezeway Properties</h1>

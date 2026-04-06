@@ -449,7 +449,7 @@ function DashboardLayoutContent({
         />
       </div>
 
-      <SidebarInset className="bg-background">
+      <SidebarInset className="bg-background min-w-0 overflow-hidden">
         {isMobile && (
           <div className="flex border-b h-14 items-center px-4 bg-background sticky top-0 z-40">
             <SidebarTrigger className="h-9 w-9 rounded-lg" />
