@@ -80,6 +80,7 @@ export default function LeisrBilling() {
     return `${now.toLocaleString("default", { month: "long" })} ${now.getFullYear()} 5STR Invoice`;
   });
   const [hasFetched, setHasFetched] = useState(false);
+  const [hideAlreadyBilled, setHideAlreadyBilled] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -118,8 +119,10 @@ export default function LeisrBilling() {
   }, [billingRecordsQuery.data]);
 
   const availableTasks = useMemo(() => {
-    return ((tasksQuery.data?.results || []) as BreezewayTask[]).filter((t) => !billedTaskIds.has(String(t.id)));
-  }, [tasksQuery.data, billedTaskIds]);
+    const all = (tasksQuery.data?.results || []) as BreezewayTask[];
+    if (hideAlreadyBilled) return all.filter((t) => !billedTaskIds.has(String(t.id)));
+    return all;
+  }, [tasksQuery.data, billedTaskIds, hideAlreadyBilled]);
 
   const sendLeisrInvoiceMutation = trpc.billing.sendLeisrInvoice.useMutation();
   const previewLeisrInvoiceMutation = trpc.billing.previewLeisrInvoice.useMutation();
@@ -490,10 +493,19 @@ export default function LeisrBilling() {
                 <Input value={invoiceDescription} onChange={(e) => setInvoiceDescription(e.target.value)} placeholder="e.g. April 2026 5STR Invoice" />
               </div>
             </div>
-            <div className="flex items-center justify-between pt-4 border-t">
+            <div className="flex items-center gap-3 pt-4 border-t">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <Checkbox checked={hideAlreadyBilled} onCheckedChange={(v) => setHideAlreadyBilled(!!v)} />
+                <span className="text-muted-foreground">Hide already billed tasks</span>
+              </label>
+              {hasFetched && billedTaskIds.size > 0 && !hideAlreadyBilled && (
+                <span className="text-xs text-amber-600">{billedTaskIds.size} previously billed included</span>
+              )}
+            </div>
+            <div className="flex items-center justify-between pt-2">
               <p className="text-sm text-muted-foreground">
                 {tasksQuery.isLoading ? "Loading tasks..."
-                  : hasFetched ? `${availableTasks.length} billable tasks found${billedTaskIds.size > 0 ? ` (${billedTaskIds.size} already billed)` : ""}`
+                  : hasFetched ? `${availableTasks.length} tasks found${hideAlreadyBilled && billedTaskIds.size > 0 ? ` (${billedTaskIds.size} already billed hidden)` : ""}`
                   : "Set date range and click Fetch Tasks"}
               </p>
               <div className="flex gap-2">
@@ -541,10 +553,16 @@ export default function LeisrBilling() {
                 <tbody>
                   {availableTasks.map((task) => {
                     const selected = selectedTaskIds.has(String(task.id));
+                    const alreadyBilled = billedTaskIds.has(String(task.id));
                     return (
                       <tr key={task.id} className={`border-t cursor-pointer hover:bg-muted/30 ${selected ? "bg-violet-50/50" : ""}`} onClick={() => toggleTask(String(task.id))}>
                         <td className="p-3"><Checkbox checked={selected} onCheckedChange={() => toggleTask(String(task.id))} /></td>
-                        <td className="p-3 font-medium">{task.name}</td>
+                        <td className="p-3 font-medium">
+                          <span className="flex items-center gap-2">
+                            {task.name}
+                            {alreadyBilled && <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-600 border-amber-300">Billed</Badge>}
+                          </span>
+                        </td>
                         <td className="p-3 text-muted-foreground">{propertyNameMap.get(String(task.home_id)) || `#${task.home_id}`}</td>
                         <td className="p-3 text-muted-foreground">{fmtDate(task.scheduled_date || task.created_at)}</td>
                         <td className="p-3"><Badge variant="secondary" className="text-xs">{task.type_task_status?.name || "Unknown"}</Badge></td>
