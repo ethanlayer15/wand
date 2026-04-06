@@ -384,6 +384,11 @@ function PropertyDetailSheet({
                   </p>
                 )}
               </div>
+
+              <Separator />
+
+              {/* Cleaning Report Recipients */}
+              <CleaningReportRecipients listingId={listing.id} isAdmin={isAdmin} />
             </div>
           </ScrollArea>
         </SheetContent>
@@ -503,6 +508,104 @@ function PropertyDetailSheet({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+// ── Cleaning Report Recipients ──────────────────────────────────────────
+
+function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const { data: recipients, isLoading } = trpc.cleaningReports.getRecipients.useQuery({ listingId });
+  const [showForm, setShowForm] = useState(false);
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+
+  const addMut = trpc.cleaningReports.addRecipient.useMutation({
+    onSuccess: () => {
+      utils.cleaningReports.getRecipients.invalidate({ listingId });
+      setEmail("");
+      setName("");
+      setShowForm(false);
+      toast.success("Recipient added");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const removeMut = trpc.cleaningReports.removeRecipient.useMutation({
+    onSuccess: () => {
+      utils.cleaningReports.getRecipients.invalidate({ listingId });
+      toast.success("Recipient removed");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold flex items-center gap-2">
+          <Mail className="h-4 w-4 text-blue-500" />
+          Cleaning Report Recipients
+        </h4>
+        {isAdmin && (
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowForm(!showForm)}>
+            <Plus className="h-3 w-3 mr-1" /> Add
+          </Button>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        These emails receive an automatic report when a turnover clean is completed.
+      </p>
+
+      {/* Add form */}
+      {showForm && (
+        <div className="rounded-lg border p-3 bg-muted/30 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-xs">Email *</Label>
+              <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@example.com" className="h-8 text-sm" />
+            </div>
+            <div>
+              <Label className="text-xs">Name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Property Owner" className="h-8 text-sm" />
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowForm(false)}>Cancel</Button>
+            <Button size="sm" className="h-7 text-xs" disabled={!email.trim() || addMut.isPending}
+              onClick={() => addMut.mutate({ listingId, email: email.trim(), name: name.trim() || undefined })}>
+              {addMut.isPending ? "Adding..." : "Add Recipient"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Recipient list */}
+      {isLoading ? (
+        <Skeleton className="h-8" />
+      ) : recipients && recipients.length > 0 ? (
+        <div className="space-y-1.5">
+          {recipients.map((r: any) => (
+            <div key={r.id} className="flex items-center justify-between px-3 py-2 rounded-md border bg-card">
+              <div className="min-w-0">
+                <p className="text-sm">{r.email}</p>
+                {r.name && <p className="text-xs text-muted-foreground">{r.name}</p>}
+              </div>
+              {isAdmin && (
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive shrink-0"
+                  onClick={() => { if (confirm(`Remove ${r.email}?`)) removeMut.mutate({ id: r.id }); }}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground italic">
+          No recipients configured. Add emails above to receive cleaning reports.
+        </p>
+      )}
+    </div>
   );
 }
 

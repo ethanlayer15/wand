@@ -835,3 +835,39 @@ export const weeklyPaySnapshots = mysqlTable("weeklyPaySnapshots", {
 
 export type WeeklyPaySnapshot = typeof weeklyPaySnapshots.$inferSelect;
 export type InsertWeeklyPaySnapshot = typeof weeklyPaySnapshots.$inferInsert;
+
+// ── Cleaning Report Recipients ──────────────────────────────────────
+
+/**
+ * Per-property email recipients for automated cleaning reports.
+ * Supports multiple emails per property (e.g., owner + property manager).
+ */
+export const cleaningReportRecipients = mysqlTable("cleaningReportRecipients", {
+  id: int("id").autoincrement().primaryKey(),
+  listingId: int("listingId").notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  name: varchar("name", { length: 256 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CleaningReportRecipient = typeof cleaningReportRecipients.$inferSelect;
+export type InsertCleaningReportRecipient = typeof cleaningReportRecipients.$inferInsert;
+
+// ── Cleaning Reports Sent ───────────────────────────────────────────
+
+/**
+ * Tracks which completed cleans have had report emails sent.
+ * Prevents duplicate sends and provides an audit trail.
+ */
+export const cleaningReportsSent = mysqlTable("cleaningReportsSent", {
+  id: int("id").autoincrement().primaryKey(),
+  completedCleanId: int("completedCleanId").notNull(),
+  breezewayTaskId: varchar("breezewayTaskId", { length: 128 }).notNull(),
+  recipientEmails: text("recipientEmails").notNull(),
+  status: mysqlEnum("reportStatus", ["sent", "failed", "no_recipients"]).default("sent").notNull(),
+  errorMessage: text("errorMessage"),
+  sentAt: timestamp("sentAt").defaultNow().notNull(),
+});
+
+export type CleaningReportSent = typeof cleaningReportsSent.$inferSelect;
+export type InsertCleaningReportSent = typeof cleaningReportsSent.$inferInsert;

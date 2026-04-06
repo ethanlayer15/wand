@@ -17,6 +17,7 @@ import { completedCleans } from "../drizzle/schema";
 import { breezewayTeam } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
+import { sendCleaningReportsForNewCleans } from "./cleaningReports";
 
 interface BreezewayTaskResponse {
   id: number;
@@ -59,6 +60,7 @@ interface CleanSyncResult {
  */
 export async function syncCompletedCleans(): Promise<CleanSyncResult> {
   const result: CleanSyncResult = { created: 0, skipped: 0, errors: 0, total: 0 };
+  const newCleanIds: number[] = []; // Track IDs for cleaning report emails
 
   const config = await getBreezewaySyncConfig();
   if (!config.enabled) {
@@ -220,7 +222,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         const primaryCleanerId = matchedCleanerIds[0];
         const pairedCleanerId = isPaired ? matchedCleanerIds[1] : null;
 
-        await db.insert(completedCleans).values({
+        const [insertResult] = await db.insert(completedCleans).values({
           breezewayTaskId: taskIdStr,
           cleanerId: primaryCleanerId,
           listingId: listing?.id ?? null,
@@ -235,6 +237,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         });
         existingTaskIds.add(taskIdStr);
         result.created++;
+        if (insertResult?.insertId) newCleanIds.push(insertResult.insertId);
 
         // If paired, insert partner record too
         if (isPaired && pairedCleanerId) {
@@ -266,6 +269,18 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     console.log(
       `[CleanSync] Complete: ${result.created} created, ${result.skipped} skipped, ${result.errors} errors`
     );
+
+    // Send cleaning report emails for newly synced cleans
+    if (newCleanIds.length > 0) {
+      try {
+        const reportResult = await sendCleaningReportsForNewCleans(newCleanIds);
+        console.log(
+          `[CleanSync] Cleaning reports: ${reportResult.sent} sent, ${reportResult.failed} failed, ${reportResult.skipped} skipped`
+        );
+      } catch (err: any) {
+        console.error("[CleanSync] Cleaning report emails failed:", err.message);
+      }
+    }
   } catch (err: any) {
     console.error("[CleanSync] Sync failed:", err.message);
     result.errors++;

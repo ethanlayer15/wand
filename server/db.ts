@@ -67,6 +67,33 @@ export async function getDb() {
           console.warn("[Database] Migration note:", e.message);
         }
       }
+
+      // Create cleaning report tables if they don't exist
+      try {
+        await _pool.promise().query(`
+          CREATE TABLE IF NOT EXISTS cleaningReportRecipients (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            listingId INT NOT NULL,
+            email VARCHAR(320) NOT NULL,
+            name VARCHAR(256),
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+          )
+        `);
+        await _pool.promise().query(`
+          CREATE TABLE IF NOT EXISTS cleaningReportsSent (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            completedCleanId INT NOT NULL,
+            breezewayTaskId VARCHAR(128) NOT NULL,
+            recipientEmails TEXT NOT NULL,
+            reportStatus ENUM('sent', 'failed', 'no_recipients') DEFAULT 'sent' NOT NULL,
+            errorMessage TEXT,
+            sentAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+          )
+        `);
+        console.log("[Database] Cleaning report tables ensured");
+      } catch (e: any) {
+        console.warn("[Database] Cleaning report tables migration:", e.message);
+      }
     } catch (error) {
       console.warn("[Database] Failed to create pool:", error);
       _db = null;
