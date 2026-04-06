@@ -23,8 +23,9 @@ import { ENV } from "./_core/env";
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
-/** Only analyze reviews from 2026 onward */
-const ANALYSIS_CUTOFF_DATE = new Date("2026-01-01T00:00:00Z");
+/** Only run AI analysis + task creation for reviews from March 25, 2026 onward.
+ *  Older reviews are still synced to the DB for the Analyze page scores/stats. */
+const ANALYSIS_CUTOFF_DATE = new Date("2026-03-25T00:00:00Z");
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
