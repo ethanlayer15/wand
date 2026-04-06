@@ -99,7 +99,7 @@ export default function LeisrBilling() {
   } | null>(null);
 
   const tasksQuery = trpc.breezeway.tasks.listByProperty.useQuery(
-    { startDate: fetchedFilters?.startDate, endDate: fetchedFilters?.endDate, propertyTags: ["Leisr Billing"], status: "completed" },
+    { startDate: fetchedFilters?.startDate, endDate: fetchedFilters?.endDate, propertyTags: ["Leisr Billing"] },
     { enabled: hasFetched && fetchedFilters !== null }
   );
 
@@ -586,18 +586,22 @@ export default function LeisrBilling() {
                   {availableTasks.map((task) => {
                     const selected = selectedTaskIds.has(String(task.id));
                     const alreadyBilled = billedTaskIds.has(String(task.id));
+                    const taskStage = task.type_task_status?.stage || "";
+                    const taskStatusName = task.type_task_status?.name || "Unknown";
+                    const isNotCompleted = taskStage !== "finished" || /cancel|skip|void/i.test(taskStatusName);
                     return (
-                      <tr key={task.id} className={`border-t cursor-pointer hover:bg-muted/30 ${selected ? "bg-violet-50/50" : ""}`} onClick={() => toggleTask(String(task.id))}>
+                      <tr key={task.id} className={`border-t cursor-pointer hover:bg-muted/30 ${selected ? "bg-violet-50/50" : ""} ${isNotCompleted ? "bg-red-50/40" : ""}`} onClick={() => toggleTask(String(task.id))}>
                         <td className="p-3"><Checkbox checked={selected} onCheckedChange={() => toggleTask(String(task.id))} /></td>
                         <td className="p-3 font-medium">
                           <span className="flex items-center gap-2">
                             {task.name}
                             {alreadyBilled && <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-600 border-amber-300">Billed</Badge>}
+                            {isNotCompleted && <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-red-600 border-red-300 gap-0.5"><AlertTriangle className="h-2.5 w-2.5" /> Not Completed</Badge>}
                           </span>
                         </td>
                         <td className="p-3 text-muted-foreground">{propertyNameMap.get(String(task.home_id)) || `#${task.home_id}`}</td>
                         <td className="p-3 text-muted-foreground">{fmtDate(task.scheduled_date || task.created_at)}</td>
-                        <td className="p-3"><Badge variant="secondary" className="text-xs">{task.type_task_status?.name || "Unknown"}</Badge></td>
+                        <td className="p-3"><Badge variant="secondary" className={`text-xs ${isNotCompleted ? "bg-red-100 text-red-700" : ""}`}>{taskStatusName}</Badge></td>
                         <td className="p-3" onClick={(e) => e.stopPropagation()}>
                           <a href={`https://app.breezeway.io/task/${task.id}`} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-violet-600 transition-colors">
                             <ExternalLink className="h-3.5 w-3.5" />
