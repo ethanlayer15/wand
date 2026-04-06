@@ -14,6 +14,7 @@ import {
   getDb,
 } from "./db";
 import { listings } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 
 // ── Hostaway Messages ───────────────────────────────────────────────
 
@@ -172,8 +173,96 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
 // ── Breezeway Team ──────────────────────────────────────────────────
 
 export async function syncBreezewayTeam(): Promise<{ synced: number; errors: number }> {
-  console.warn("[Sync] syncBreezewayTeam is a stub — re-export from Manus");
-  return { synced: 0, errors: 0 };
+  let synced = 0;
+  let errors = 0;
+  try {
+    const db = await getDb();
+    if (!db) return { synced: 0, errors: 0 };
+
+    const client = createBreezewayClient();
+    const response = await client.get<{
+      results?: any[];
+    }>("/user/", { limit: 200, page: 1 });
+
+    const users = response.results || [];
+    console.log(`[Sync] Fetched ${users.length} Breezeway team members`);
+
+    const { breezewayTeam } = await import("../drizzle/schema");
+
+    for (const user of users) {
+      try {
+        const breezewayId = String(user.id);
+        // Upsert by breezewayId
+        const existing = await db
+          .select()
+          .from(breezewayTeam)
+          .where(eq(breezewayTeam.breezewayId, breezewayId))
+          .limit(1);
+
+        if (existing.length > 0) {
+          await db
+            .update(breezewayTeam)
+            .set({
+              firstName: user.first_name || user.firstName || null,
+              lastName: user.last_name || user.lastName || null,
+              email: user.email || null,
+              role: user.role || user.type || null,
+              active: user.status === "active" || user.active !== false,
+              syncedAt: new Date(),
+            })
+            .where(eq(breezewayTeam.breezewayId, breezewayId));
+        } else {
+          await db.insert(breezewayTeam).values({
+            breezewayId,
+            firstName: user.first_name || user.firstName || null,
+            lastName: user.last_name || user.lastName || null,
+            email: user.email || null,
+            role: user.role || user.type || null,
+            active: user.status === "active" || user.active !== false,
+            syncedAt: new Date(),
+          });
+        }
+        synced++;
+      } catch (e: any) {
+        console.error(`[Sync] Failed to upsert Breezeway team member ${user.id}: ${e.message}`);
+        errors++;
+      }
+    }
+    // Auto-create cleaners for team members that don't have one yet
+    const { cleaners } = await import("../drizzle/schema");
+    const allTeamMembers = await db.select().from(breezewayTeam);
+    const existingCleaners = await db.select().from(cleaners);
+    const linkedTeamIds = new Set(existingCleaners.map((c) => c.breezewayTeamId).filter(Boolean));
+    let autoCreated = 0;
+
+    for (const tm of allTeamMembers) {
+      if (linkedTeamIds.has(tm.id)) continue;
+      const name = [tm.firstName, tm.lastName].filter(Boolean).join(" ") || `Team Member ${tm.breezewayId}`;
+      try {
+        await db.insert(cleaners).values({
+          breezewayTeamId: tm.id,
+          name,
+          email: tm.email ?? null,
+          currentMultiplier: "1.0",
+        });
+        autoCreated++;
+      } catch (e: any) {
+        // Ignore duplicates
+        if (!e.message?.includes("Duplicate")) {
+          console.warn(`[Sync] Failed to auto-create cleaner for ${name}: ${e.message}`);
+        }
+      }
+    }
+    if (autoCreated > 0) {
+      console.log(`[Sync] Auto-created ${autoCreated} cleaners from Breezeway team members`);
+    }
+
+    console.log(`[Sync] Breezeway team sync complete: ${synced} synced, ${errors} errors`);
+  } catch (e: any) {
+    console.error(`[Sync] Breezeway team sync failed: ${e.message}`);
+    errors++;
+  }
+  return { synced, errors };
 }
 
 // ── Breezeway Webhooks ──────────────────────────────────────────────

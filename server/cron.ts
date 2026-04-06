@@ -18,6 +18,7 @@ import { pollBreezewayTasks } from "./breezewayTaskSync";
 import { syncCompletedCleans } from "./breezewayCleanSync";
 import { getBreezewaySyncConfig } from "./db";
 import { sendAllWeeklyPayReports, sendReceiptReminders } from "./emailReports";
+import { syncBreezewayTeam } from "./sync";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -265,6 +266,35 @@ export function startCronJobs(): void {
   }, 30 * 60 * 1000); // 30 minutes
   timers.push(cleanSyncTimer);
   console.log("[Cron] Completed cleans sync scheduled (every 30 min, if enabled)");
+
+  // 4c. Breezeway team sync — once on startup and then daily
+  const teamSyncStartup = setTimeout(async () => {
+    try {
+      const config = await getBreezewaySyncConfig();
+      if (config.enabled) {
+        console.log("[Cron] Running initial Breezeway team sync...");
+        const result = await syncBreezewayTeam();
+        console.log(`[Cron] Breezeway team sync: ${result.synced} synced, ${result.errors} errors`);
+      }
+    } catch (err: any) {
+      console.error("[Cron] Breezeway team sync failed:", err.message);
+    }
+  }, 15_000); // 15s after startup
+  timers.push(teamSyncStartup);
+
+  const teamSyncDaily = setInterval(async () => {
+    try {
+      const config = await getBreezewaySyncConfig();
+      if (config.enabled) {
+        const result = await syncBreezewayTeam();
+        console.log(`[Cron] Daily Breezeway team sync: ${result.synced} synced, ${result.errors} errors`);
+      }
+    } catch (err: any) {
+      console.error("[Cron] Daily Breezeway team sync failed:", err.message);
+    }
+  }, ONE_DAY_MS);
+  timers.push(teamSyncDaily);
+  console.log("[Cron] Breezeway team sync scheduled (daily, if enabled)");
 
   // 6. Weekly pay reports — Friday 8 AM ET
   const fridayDelay = msUntilDayHourET(5, 8); // 5 = Friday, 8 = 8 AM ET

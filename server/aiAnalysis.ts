@@ -60,39 +60,7 @@ export async function analyzeReview(reviewId: number): Promise<boolean> {
         { role: "system", content: "You are a precise JSON-only analyst. Return only valid JSON, no markdown." },
         { role: "user", content: prompt },
       ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "review_analysis",
-          strict: true,
-          schema: {
-            type: "object",
-            properties: {
-              categories: { type: "array", items: { type: "string" } },
-              sentimentScore: { type: "integer" },
-              issues: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    type: { type: "string" },
-                    description: { type: "string" },
-                    severity: { type: "string" },
-                    quote: { type: "string" },
-                  },
-                  required: ["type", "description", "severity", "quote"],
-                  additionalProperties: false,
-                },
-              },
-              highlights: { type: "array", items: { type: "string" } },
-              cleanerMentioned: { type: ["string", "null"] },
-              summary: { type: "string" },
-            },
-            required: ["categories", "sentimentScore", "issues", "highlights", "cleanerMentioned", "summary"],
-            additionalProperties: false,
-          },
-        },
-      },
+      response_format: { type: "json_object" },
     });
 
     const content = response.choices?.[0]?.message?.content as string | undefined;
@@ -112,8 +80,8 @@ export async function analyzeReview(reviewId: number): Promise<boolean> {
     });
 
     return true;
-  } catch (err) {
-    console.error(`[AI] Failed to analyze review ${reviewId}:`, err);
+  } catch (err: any) {
+    console.error(`[AI] Failed to analyze review ${reviewId}:`, err?.message || err);
     return false;
   }
 }
@@ -225,6 +193,9 @@ export async function startBackgroundAnalysisJob(): Promise<string> {
     const BATCH_SIZE = 50;
     let totalAnalyzed = 0;
     let totalErrors = 0;
+    let consecutiveErrors = 0;
+
+    console.log(`[AnalysisJob] ${jobId} starting: ${totalCount} reviews to analyze`);
 
     try {
       while (true) {
@@ -242,8 +213,13 @@ export async function startBackgroundAnalysisJob(): Promise<string> {
           if (!currentJob2 || currentJob2.status !== "running") break;
 
           const success = await analyzeReview(id);
-          if (success) totalAnalyzed++;
-          else totalErrors++;
+          if (success) {
+            totalAnalyzed++;
+            consecutiveErrors = 0;
+          } else {
+            totalErrors++;
+            consecutiveErrors++;
+          }
 
           // Update progress
           currentJob2.analyzed = totalAnalyzed;
@@ -251,8 +227,16 @@ export async function startBackgroundAnalysisJob(): Promise<string> {
           currentJob2.updatedAt = Date.now();
           currentJob2.message = `Analyzing... ${totalAnalyzed} done, ${totalErrors} errors`;
 
-          // Small delay between reviews to avoid rate limiting
-          await new Promise((r) => setTimeout(r, 150));
+          // Stop if we get 10 consecutive errors (likely a systemic issue)
+          if (consecutiveErrors >= 10) {
+            console.error(`[AnalysisJob] ${jobId} stopped: ${consecutiveErrors} consecutive errors`);
+            currentJob2.status = "error";
+            currentJob2.message = `Stopped after ${consecutiveErrors} consecutive errors. ${totalAnalyzed} analyzed, ${totalErrors} errors total. Check server logs for details.`;
+            return;
+          }
+
+          // Delay between reviews to avoid rate limiting (300ms = ~3.3 req/s)
+          await new Promise((r) => setTimeout(r, 300));
         }
 
         // Small delay between batches

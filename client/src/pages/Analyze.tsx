@@ -486,7 +486,8 @@ function AnalyzeActions() {
   });
 
   const isRunning = jobStatus?.status === "running";
-  const progress = jobStatus && isRunning ? { done: jobStatus.analyzed, total: jobStatus.total } : null;
+  const isError = jobStatus?.status === "error";
+  const progress = jobStatus && (isRunning || isError) ? { done: jobStatus.analyzed, total: jobStatus.total, errors: jobStatus.errors } : null;
 
   return (
     <div className="flex items-center gap-2">
@@ -500,6 +501,9 @@ function AnalyzeActions() {
           </div>
           <span className="text-xs text-muted-foreground whitespace-nowrap">
             {progress.done.toLocaleString()} / {progress.total.toLocaleString()}
+            {progress.errors > 0 && (
+              <span className="text-red-500 ml-1">({progress.errors} errors)</span>
+            )}
           </span>
         </div>
       )}
