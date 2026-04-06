@@ -236,8 +236,14 @@ export function startCronJobs(): void {
   // 2. SDT Slack notification — daily at 7 AM
   scheduleAtHours("SDT Check", [7], runSdtCheck);
 
-  // 3. Guest message pipeline — 5× daily: 7 AM, 11 AM, 2 PM, 5 PM, 8 PM
-  scheduleAtHours("Guest Message Pipeline", [7, 11, 14, 17, 20], runGuestMessages);
+  // 3. Guest message pipeline — every 15 minutes
+  const guestMsgTimer = setInterval(() => {
+    runGuestMessages().catch((err) =>
+      console.error("[Cron] Guest message pipeline interval failed:", err.message)
+    );
+  }, FIFTEEN_MINUTES_MS);
+  timers.push(guestMsgTimer);
+  console.log("[Cron] Guest message pipeline scheduled (every 15 min)");
 
   // 5. Review pipeline — 5× daily on same schedule as guest messages
   scheduleAtHours("Review Pipeline", [7, 11, 14, 17, 20], runReviewPipeline);
