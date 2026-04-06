@@ -127,11 +127,30 @@ class HostawayClient {
     return all;
   }
 
-  async getReviews(listingId?: number): Promise<any[]> {
-    const params: Record<string, any> = { limit: 100 };
+  async getReviews(listingId?: number, limit = 100, offset = 0): Promise<{ result: any[] }> {
+    const params: Record<string, any> = { limit, offset };
     if (listingId) params.listingId = listingId;
     const resp = await this.get<{ result: any[] }>("/reviews", params);
-    return resp.result || [];
+    return { result: resp.result || [] };
+  }
+
+  async getAllReviews(maxReviews = 5000): Promise<any[]> {
+    const all: any[] = [];
+    let offset = 0;
+    const limit = 100;
+    const maxPages = Math.ceil(maxReviews / limit);
+    let page = 0;
+
+    while (page < maxPages) {
+      const resp = await this.getReviews(undefined, limit, offset);
+      all.push(...resp.result);
+      page++;
+      if (resp.result.length < limit || all.length >= maxReviews) break;
+      offset += limit;
+    }
+
+    console.log(`[Hostaway] Fetched ${all.length} reviews total (${page} pages)`);
+    return all.slice(0, maxReviews);
   }
 }
 
