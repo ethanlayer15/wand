@@ -63,8 +63,10 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
     const reviewIdStr = String(review.id);
     if (existingIds.has(reviewIdStr)) continue;
 
-    // Only sync guest-to-host reviews (reviews FROM guests)
-    // Also include reviews without a type (some older reviews may not have this field)
+    // Only sync published guest reviews
+    // 1. Must be published (skip drafts, pending, etc.)
+    if (review.status && review.status !== "published") continue;
+    // 2. Must be from guest, not host (guest-to-host)
     if (review.type && review.type !== "guest-to-host") continue;
 
     const localListingId = listingMap.get(String(review.listingMapId));
