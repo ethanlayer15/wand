@@ -518,6 +518,7 @@ export default function LeisrBilling() {
                         { propertySearch: "golden jewel", taskType: "turnover-clean", amount: "225.00" },
                         { propertySearch: "madison", taskType: "turnover-clean", amount: "205.00" },
                         { propertySearch: "commerce loft", taskType: "turnover-clean", amount: "150.00" },
+                        { propertySearch: "bass cove", taskType: "turnover-clean", amount: "435.00" },
                       ],
                     });
                     const summary = res.results.map((r: any) =>
