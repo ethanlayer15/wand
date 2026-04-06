@@ -83,12 +83,22 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
       else source = "direct";
     }
 
+    // Extract Airbnb cleanliness sub-score from category ratings
+    // Hostaway returns categoryRatings as an object like { cleanliness: 5, accuracy: 4, ... }
+    let cleanlinessRating: number | null = null;
+    if (review.categoryRatings?.cleanliness) {
+      cleanlinessRating = Number(review.categoryRatings.cleanliness);
+    } else if (review.subRatings?.cleanliness) {
+      cleanlinessRating = Number(review.subRatings.cleanliness);
+    }
+
     try {
       await db.insert(reviews).values({
         hostawayReviewId: reviewIdStr,
         listingId: localListingId,
         hostawayReservationId: review.reservationId ? String(review.reservationId) : null,
         rating: review.rating || null,
+        cleanlinessRating,
         text: review.publicReview || null,
         privateFeedback: review.privateFeedback || null,
         guestName: review.guestName || review.reviewerName || null,

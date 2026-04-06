@@ -70,6 +70,7 @@ export const reviews = mysqlTable("reviews", {
   listingId: int("listingId").notNull(),
   hostawayReservationId: varchar("hostawayReservationId", { length: 128 }),
   rating: int("rating"),
+  cleanlinessRating: int("cleanlinessRating"), // Airbnb cleaning sub-score (1-5)
   text: text("text"),                  // publicReview content
   privateFeedback: text("privateFeedback"), // private feedback from guest
   guestName: varchar("guestName", { length: 256 }),

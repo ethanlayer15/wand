@@ -54,6 +54,19 @@ export async function getDb() {
       });
       _db = drizzle(_pool);
       console.log("[Database] Connection pool created");
+
+      // Run safe schema migrations (idempotent ALTER TABLE statements)
+      try {
+        await _pool.promise().query(
+          `ALTER TABLE reviews ADD COLUMN cleanlinessRating int DEFAULT NULL`
+        );
+        console.log("[Database] Added cleanlinessRating column to reviews");
+      } catch (e: any) {
+        // Column already exists — expected after first run
+        if (!e.message?.includes("Duplicate column")) {
+          console.warn("[Database] Migration note:", e.message);
+        }
+      }
     } catch (error) {
       console.warn("[Database] Failed to create pool:", error);
       _db = null;

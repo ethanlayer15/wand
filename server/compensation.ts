@@ -14,13 +14,14 @@
  * New cleaners default to 1.0x until they establish a 30-day score history.
  */
 
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, gte, lte } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   cleaners,
   cleanerScoreHistory,
   reviewAnalysis,
   reviews,
+  completedCleans,
   Cleaner,
 } from "../drizzle/schema";
 
@@ -73,11 +74,18 @@ export function getNextTierInfo(score: number | null): {
 // ── Rolling Score Calculation ───────────────────────────────────────
 
 /**
- * Calculate a single cleaner's rolling 30-day average Wand score.
- * Sources from review analyses where cleanerMentioned matches the cleaner name.
- * Normalizes ratings to 5-star scale.
+ * Calculate a single cleaner's rolling 30-day cleaning score.
+ *
+ * Attribution: Cross-references review departure dates with completedCleans
+ * to find which cleaner cleaned the property before the guest's stay.
+ *
+ * Scoring rules:
+ * 1. Airbnb reviews: use the cleanlinessRating sub-score (1-5)
+ * 2. Non-Airbnb reviews: default to 5 UNLESS AI analysis detects negative
+ *    cleaning sentiment — then use the overall review rating
+ * 3. If overall rating < 5 but no cleaning issues mentioned → skip (don't count)
  */
-export async function calculateCleanerRollingScore(cleanerName: string): Promise<{
+export async function calculateCleanerRollingScore(cleanerName: string, cleanerId?: number): Promise<{
   score: number | null;
   reviewCount: number;
   multiplier: number;
@@ -85,50 +93,138 @@ export async function calculateCleanerRollingScore(cleanerName: string): Promise
   const db = await getDb();
   if (!db) return { score: null, reviewCount: 0, multiplier: 1.0 };
 
+  // If no cleanerId provided, look it up by name
+  let cId = cleanerId;
+  if (!cId) {
+    const [cleaner] = await db.select({ id: cleaners.id })
+      .from(cleaners)
+      .where(eq(cleaners.name, cleanerName))
+      .limit(1);
+    if (!cleaner) return { score: null, reviewCount: 0, multiplier: 1.0 };
+    cId = cleaner.id;
+  }
+
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  // Get all review analyses mentioning this cleaner in the last 30 days
-  const allAnalyses = await db.select().from(reviewAnalysis);
-  const allReviews = await db.select().from(reviews);
+  // Get this cleaner's completed cleans from the last 45 days
+  // (wider window to catch cleans whose reviews arrive later)
+  const fortyFiveDaysAgo = new Date();
+  fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45);
 
-  const reviewMap = new Map(allReviews.map((r) => [r.id, r]));
+  const cleanerCleans = await db.select()
+    .from(completedCleans)
+    .where(
+      and(
+        eq(completedCleans.cleanerId, cId),
+        gte(completedCleans.scheduledDate, fortyFiveDaysAgo)
+      )
+    );
 
-  // Filter to analyses mentioning this cleaner with recent reviews
-  const relevantAnalyses = allAnalyses.filter((a) => {
-    if (!a.cleanerMentioned) return false;
-    // Case-insensitive match
-    if (a.cleanerMentioned.toLowerCase() !== cleanerName.toLowerCase()) return false;
-    const review = reviewMap.get(a.reviewId);
-    if (!review) return false;
-    // Use submittedAt if available, otherwise createdAt
-    const reviewDate = review.submittedAt ?? review.createdAt;
-    return reviewDate >= thirtyDaysAgo;
-  });
-
-  if (relevantAnalyses.length === 0) {
+  if (cleanerCleans.length === 0) {
     return { score: null, reviewCount: 0, multiplier: 1.0 };
   }
 
-  // Calculate average rating from the reviews
-  const ratings: number[] = [];
-  for (const a of relevantAnalyses) {
-    const review = reviewMap.get(a.reviewId);
-    if (review?.rating) {
-      // Normalize to 5-star scale
-      const normalized = review.rating > 5 ? review.rating / 2 : review.rating;
-      ratings.push(normalized);
+  // Build a map: listingId → clean dates for this cleaner
+  const cleansByListing = new Map<number, Date[]>();
+  for (const clean of cleanerCleans) {
+    if (!clean.listingId || !clean.scheduledDate) continue;
+    const existing = cleansByListing.get(clean.listingId) || [];
+    existing.push(new Date(clean.scheduledDate));
+    cleansByListing.set(clean.listingId, existing);
+  }
+
+  // Get reviews from the last 30 days for properties this cleaner has cleaned
+  const listingIds = [...cleansByListing.keys()];
+  if (listingIds.length === 0) {
+    return { score: null, reviewCount: 0, multiplier: 1.0 };
+  }
+
+  const recentReviews = await db.select()
+    .from(reviews)
+    .where(gte(reviews.submittedAt, thirtyDaysAgo));
+
+  // Get AI analyses for cleaning issue detection (for non-Airbnb reviews)
+  const allAnalyses = await db.select().from(reviewAnalysis);
+  const analysisMap = new Map(allAnalyses.map((a) => [a.reviewId, a]));
+
+  // Match reviews to this cleaner's cleans
+  const cleaningScores: number[] = [];
+
+  for (const review of recentReviews) {
+    if (!review.listingId) continue;
+    const cleanDates = cleansByListing.get(review.listingId);
+    if (!cleanDates) continue; // This cleaner didn't clean this property
+
+    // Check if the cleaner's clean date was before the review's arrival/departure
+    // The clean should have happened before or on the arrival date
+    const reviewArrival = review.arrivalDate ? new Date(review.arrivalDate) : null;
+    const reviewDeparture = review.departureDate ? new Date(review.departureDate) : null;
+    const reviewDate = reviewArrival || review.submittedAt;
+    if (!reviewDate) continue;
+
+    // Find a clean that was scheduled within 3 days before the guest's arrival
+    // (turnover cleans typically happen same day or day before check-in)
+    const matchingClean = cleanDates.find((cleanDate) => {
+      const diffMs = reviewDate.getTime() - cleanDate.getTime();
+      const diffDays = diffMs / (1000 * 60 * 60 * 24);
+      return diffDays >= -1 && diffDays <= 3; // clean was 1 day after to 3 days before arrival
+    });
+
+    if (!matchingClean) continue; // No matching clean for this review
+
+    // Determine the cleaning score for this review
+    const isAirbnb = review.source === "airbnb";
+
+    if (isAirbnb && review.cleanlinessRating) {
+      // Rule 1: Airbnb reviews — use cleanliness sub-score directly
+      cleaningScores.push(review.cleanlinessRating);
+    } else if (!isAirbnb) {
+      // Rule 2: Non-Airbnb reviews
+      const analysis = analysisMap.get(review.id);
+      const hasCleaningIssue = analysis?.issues?.some(
+        (i) => i.type === "cleaning"
+      ) ?? false;
+
+      if (hasCleaningIssue) {
+        // Negative cleaning mentioned → use overall rating (normalized to 5)
+        const rating = review.rating
+          ? (review.rating > 5 ? review.rating / 2 : review.rating)
+          : 3;
+        cleaningScores.push(rating);
+      } else {
+        // No cleaning issues → count as 5
+        cleaningScores.push(5);
+      }
+    } else if (isAirbnb && !review.cleanlinessRating) {
+      // Airbnb but no cleanliness sub-score available — fall back to AI analysis
+      const analysis = analysisMap.get(review.id);
+      const hasCleaningIssue = analysis?.issues?.some(
+        (i) => i.type === "cleaning"
+      ) ?? false;
+
+      if (hasCleaningIssue) {
+        const rating = review.rating
+          ? (review.rating > 5 ? review.rating / 2 : review.rating)
+          : 3;
+        cleaningScores.push(rating);
+      } else {
+        // No cleaning issues and it's Airbnb → count as 5
+        cleaningScores.push(5);
+      }
     }
   }
 
-  if (ratings.length === 0) {
-    return { score: null, reviewCount: relevantAnalyses.length, multiplier: 1.0 };
+  if (cleaningScores.length === 0) {
+    return { score: null, reviewCount: 0, multiplier: 1.0 };
   }
 
-  const avgScore = Number((ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(2));
+  const avgScore = Number(
+    (cleaningScores.reduce((a, b) => a + b, 0) / cleaningScores.length).toFixed(2)
+  );
   const multiplier = getMultiplierForScore(avgScore);
 
-  return { score: avgScore, reviewCount: ratings.length, multiplier };
+  return { score: avgScore, reviewCount: cleaningScores.length, multiplier };
 }
 
 /**
@@ -149,7 +245,7 @@ export async function recalculateAllRollingScores(): Promise<{
 
   for (const cleaner of allCleaners) {
     try {
-      const { score, reviewCount, multiplier } = await calculateCleanerRollingScore(cleaner.name);
+      const { score, reviewCount, multiplier } = await calculateCleanerRollingScore(cleaner.name, cleaner.id);
 
       // Update the cleaner record
       await db
