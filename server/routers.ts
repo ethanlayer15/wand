@@ -682,17 +682,22 @@ export const appRouter = router({
             console.log(`[Breezeway] Fetching tasks for ${targetProperties.length} properties (date: ${input.startDate}–${input.endDate})`);
 
             // Helper: fetch ALL pages for a single property
-            // NOTE: Breezeway /task/ API requires reference_property_id (Hostaway ID), NOT home_id (Breezeway internal ID)
-            const fetchAllPagesForProperty = async (referencePropertyId: string): Promise<BwTask[]> => {
+            // Uses reference_property_id (Hostaway ID) if available, falls back to home_id (Breezeway internal ID)
+            const fetchAllPagesForProperty = async (prop: { referencePropertyId?: string | null; breezewayId: string }): Promise<BwTask[]> => {
               const PAGE_LIMIT = 100; // max per page
               const tasks: BwTask[] = [];
               let page = 1;
               while (true) {
                 const params: Record<string, string | number> = {
-                  reference_property_id: referencePropertyId,
                   limit: PAGE_LIMIT,
                   page,
                 };
+                // Use referencePropertyId if available, otherwise fall back to breezewayId (home_id)
+                if (prop.referencePropertyId) {
+                  params.reference_property_id = prop.referencePropertyId;
+                } else {
+                  params.home_id = Number(prop.breezewayId);
+                }
                 // Pass date range to Breezeway API for server-side filtering (much faster)
                 if (input.startDate) params.scheduled_date_start = input.startDate;
                 if (input.endDate) params.scheduled_date_end = input.endDate;
@@ -708,17 +713,20 @@ export const appRouter = router({
               return tasks;
             };
 
-            // Only query properties that have a referencePropertyId (Hostaway ID) — required by Breezeway API
-            const queryableProperties = targetProperties.filter((p) => p.referencePropertyId);
-            console.log(`[Breezeway] ${queryableProperties.length}/${targetProperties.length} target properties have referencePropertyId`);
+            // ALL tagged properties are now queryable — we fall back to home_id for those without referencePropertyId
+            const queryableProperties = targetProperties;
+            const propsWithRefId = targetProperties.filter((p) => p.referencePropertyId).length;
+            const propsWithHomeIdOnly = targetProperties.length - propsWithRefId;
+            console.log(`[Breezeway] ${targetProperties.length} target properties (${propsWithRefId} via referencePropertyId, ${propsWithHomeIdOnly} via home_id fallback)`);
 
-            // Track which properties were skipped (no referencePropertyId)
-            const skippedProperties = targetProperties
+            // Track properties using home_id fallback
+            const homeIdFallbackProperties = targetProperties
               .filter((p) => !p.referencePropertyId)
               .map((p) => p.name ?? `ID ${p.breezewayId}`);
-            if (skippedProperties.length > 0) {
-              console.warn(`[Breezeway] Skipped properties (no referencePropertyId): ${skippedProperties.join(', ')}`);
+            if (homeIdFallbackProperties.length > 0) {
+              console.log(`[Breezeway] Properties using home_id fallback: ${homeIdFallbackProperties.join(', ')}`);
             }
+            const skippedProperties: string[] = []; // No longer skipping any properties
 
             // Controlled parallel fetch with retry logic
             const BATCH_SIZE = 3;
@@ -744,7 +752,7 @@ export const appRouter = router({
                 }
 
                 const batchResults = await Promise.allSettled(
-                  pendingProps.map(({ prop }) => fetchAllPagesForProperty(prop.referencePropertyId!))
+                  pendingProps.map(({ prop }) => fetchAllPagesForProperty(prop))
                 );
 
                 const stillFailing: typeof pendingProps = [];
