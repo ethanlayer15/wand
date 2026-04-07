@@ -556,6 +556,31 @@ export default function LeisrBilling() {
                 {bulkUpsertRatesMutation.isPending ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Updating...</> : "Seed Missing Rate Cards"}
               </Button>
             </div>
+            {/* Debug info — property fetch diagnostics */}
+            {hasFetched && !tasksQuery.isLoading && (tasksQuery.data as any)?._debug && (
+              <div className="rounded-md border border-blue-200 bg-blue-50/50 p-3 text-xs space-y-1">
+                <p className="font-medium text-blue-800">
+                  📊 {(tasksQuery.data as any)._debug.taggedProperties} tagged properties →{" "}
+                  {(tasksQuery.data as any)._debug.queryableProperties} queryable →{" "}
+                  {availableTasks.length} tasks
+                </p>
+                {(tasksQuery.data as any)._debug.skippedProperties?.length > 0 && (
+                  <p className="text-red-700">
+                    ⚠ Skipped (no Hostaway link): {(tasksQuery.data as any)._debug.skippedProperties.join(", ")}
+                  </p>
+                )}
+                {(tasksQuery.data as any)._debug.failedProperties?.length > 0 && (
+                  <p className="text-red-700">
+                    ❌ Failed to fetch: {(tasksQuery.data as any)._debug.failedProperties.join(", ")}
+                  </p>
+                )}
+                {(tasksQuery.data as any)._debug.zeroTaskProperties?.length > 0 && (
+                  <p className="text-amber-700">
+                    0 tasks: {(tasksQuery.data as any)._debug.zeroTaskProperties.join(", ")}
+                  </p>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between pt-2">
               <p className="text-sm text-muted-foreground">
                 {tasksQuery.isLoading ? "Loading tasks..."

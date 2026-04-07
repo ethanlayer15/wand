@@ -712,13 +712,22 @@ export const appRouter = router({
             const queryableProperties = targetProperties.filter((p) => p.referencePropertyId);
             console.log(`[Breezeway] ${queryableProperties.length}/${targetProperties.length} target properties have referencePropertyId`);
 
+            // Track which properties were skipped (no referencePropertyId)
+            const skippedProperties = targetProperties
+              .filter((p) => !p.referencePropertyId)
+              .map((p) => p.name ?? `ID ${p.breezewayId}`);
+            if (skippedProperties.length > 0) {
+              console.warn(`[Breezeway] Skipped properties (no referencePropertyId): ${skippedProperties.join(', ')}`);
+            }
+
             // Controlled parallel fetch with retry logic
-            // Reduced batch size + longer delay to avoid Breezeway rate limits
             const BATCH_SIZE = 3;
             const INTER_BATCH_DELAY_MS = 500;
             const MAX_RETRIES = 2;
             const allTasks: BwTask[] = [];
             let fetchErrors = 0;
+            const propertyTaskCounts: Record<string, number> = {};
+            const failedProperties: string[] = [];
 
             for (let i = 0; i < queryableProperties.length; i += BATCH_SIZE) {
               const batch = queryableProperties.slice(i, i + BATCH_SIZE);
@@ -729,7 +738,7 @@ export const appRouter = router({
 
               while (pendingProps.length > 0 && attempt <= MAX_RETRIES) {
                 if (attempt > 0) {
-                  const retryDelay = attempt * 15000; // 15s, 30s
+                  const retryDelay = attempt * 15000;
                   console.warn(`[Breezeway] Retry attempt ${attempt}/${MAX_RETRIES} for ${pendingProps.length} properties — waiting ${retryDelay / 1000}s...`);
                   await new Promise((resolve) => setTimeout(resolve, retryDelay));
                 }
@@ -741,10 +750,11 @@ export const appRouter = router({
                 const stillFailing: typeof pendingProps = [];
                 for (let j = 0; j < batchResults.length; j++) {
                   const result = batchResults[j];
+                  const propName = pendingProps[j].prop.name ?? 'unknown';
                   if (result.status === 'fulfilled') {
                     allTasks.push(...result.value);
+                    propertyTaskCounts[propName] = result.value.length;
                   } else {
-                    const propName = pendingProps[j].prop.name ?? 'unknown';
                     const errMsg = result.reason?.message ?? String(result.reason);
                     const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
 
@@ -753,6 +763,7 @@ export const appRouter = router({
                       stillFailing.push(pendingProps[j]);
                     } else {
                       fetchErrors++;
+                      failedProperties.push(propName);
                       console.error(`[Breezeway] Failed to fetch tasks for ${propName} (attempt ${attempt + 1}): ${errMsg}`);
                     }
                   }
@@ -768,6 +779,15 @@ export const appRouter = router({
               }
             }
 
+            // Log per-property task counts for diagnostics
+            const zeroTaskProps = Object.entries(propertyTaskCounts).filter(([, count]) => count === 0).map(([name]) => name);
+            console.log(`[Breezeway] Per-property task counts:`, JSON.stringify(propertyTaskCounts));
+            if (zeroTaskProps.length > 0) {
+              console.warn(`[Breezeway] Properties with 0 tasks: ${zeroTaskProps.join(', ')}`);
+            }
+            if (failedProperties.length > 0) {
+              console.warn(`[Breezeway] Failed properties: ${failedProperties.join(', ')}`);
+            }
             if (fetchErrors > 0) {
               console.warn(`[Breezeway] ${fetchErrors}/${queryableProperties.length} properties failed to fetch after retries`);
             }
@@ -810,7 +830,19 @@ export const appRouter = router({
             });
 
             console.log(`[Breezeway] Returning ${filteredTasks.length} tasks after all filters`);
-            return { results: filteredTasks, totalResults: filteredTasks.length };
+            return {
+              results: filteredTasks,
+              totalResults: filteredTasks.length,
+              _debug: {
+                totalProperties: allProperties.length,
+                taggedProperties: targetProperties.length,
+                queryableProperties: queryableProperties.length,
+                skippedProperties,
+                failedProperties,
+                zeroTaskProperties: zeroTaskProps,
+                propertyTaskCounts,
+              },
+            };
           } catch (err) {
             console.error("[Breezeway] Failed to fetch tasks:", err);
             return { results: [], totalResults: 0 };
