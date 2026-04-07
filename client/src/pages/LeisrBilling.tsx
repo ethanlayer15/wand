@@ -177,47 +177,69 @@ export default function LeisrBilling() {
       const propIdStr = String(propId);
       const propName = propertyNameMap.get(propIdStr) || `Property ${propId}`;
       const unitPrice = getRate(propIdStr, "turnover-clean");
-      const flags: Flag[] = [];
-      const taskDetails: LineItem["tasks"] = [];
 
-      // Detect same-day duplicates
-      const dateMap = new Map<string, BreezewayTask[]>();
+      // Separate completed vs incomplete turnover cleans
+      const completedTasks: BreezewayTask[] = [];
+      const incompleteTasks: BreezewayTask[] = [];
       for (const t of propTasks) {
-        const dk = (t.scheduled_date || t.created_at || "").split("T")[0];
-        const arr = dateMap.get(dk) || [];
-        arr.push(t);
-        dateMap.set(dk, arr);
+        const stage = t.type_task_status?.stage || "";
+        const statusName = t.type_task_status?.name || "Unknown";
+        const isIncomplete = stage !== "finished" || /cancel|skip|void/i.test(statusName);
+        (isIncomplete ? incompleteTasks : completedTasks).push(t);
       }
 
-      for (const [dateKey, dateTasks] of dateMap) {
-        const isDup = dateTasks.length > 1;
-        if (isDup) {
-          flags.push({ type: "duplicate", message: `${dateTasks.length} cleans on ${fmtDate(dateKey)} — possible duplicate` });
+      // Group completed turnover cleans as before
+      if (completedTasks.length > 0) {
+        const flags: Flag[] = [];
+        const taskDetails: LineItem["tasks"] = [];
+
+        // Detect same-day duplicates among completed tasks
+        const dateMap = new Map<string, BreezewayTask[]>();
+        for (const t of completedTasks) {
+          const dk = (t.scheduled_date || t.created_at || "").split("T")[0];
+          const arr = dateMap.get(dk) || [];
+          arr.push(t);
+          dateMap.set(dk, arr);
         }
-        for (const t of dateTasks) {
-          const statusName = t.type_task_status?.name || "Unknown";
-          const stage = t.type_task_status?.stage || "";
-          const isIncomplete = stage !== "finished" || /cancel|skip|void/i.test(statusName);
-          if (isIncomplete) {
-            flags.push({ type: "incomplete", message: `"${t.name}" status: ${statusName}`, taskId: String(t.id) });
+
+        for (const [dateKey, dateTasks] of dateMap) {
+          const isDup = dateTasks.length > 1;
+          if (isDup) {
+            flags.push({ type: "duplicate", message: `${dateTasks.length} cleans on ${fmtDate(dateKey)} — possible duplicate` });
           }
-          taskDetails.push({
-            taskId: String(t.id), taskName: t.name, date: fmtDate(t.scheduled_date || t.created_at),
-            statusName, flagged: isDup || isIncomplete,
-            flagReason: isDup ? "Duplicate on same day" : isIncomplete ? `Status: ${statusName}` : undefined,
-          });
+          for (const t of dateTasks) {
+            const statusName = t.type_task_status?.name || "Unknown";
+            taskDetails.push({
+              taskId: String(t.id), taskName: t.name, date: fmtDate(t.scheduled_date || t.created_at),
+              statusName, flagged: isDup,
+              flagReason: isDup ? "Duplicate on same day" : undefined,
+            });
+          }
         }
+
+        taskDetails.sort((a, b) => a.date.localeCompare(b.date));
+
+        items.push({
+          key: `clean:${propIdStr}`, isGroupedClean: true, propertyId: propIdStr, propertyName: propName,
+          label: "Turnover Cleans", quantity: completedTasks.length, unitPrice, included: true,
+          taskIds: completedTasks.map((t) => String(t.id)), taskNames: completedTasks.map((t) => t.name),
+          dates: completedTasks.map((t) => fmtDate(t.scheduled_date || t.created_at)),
+          flags, tasks: taskDetails,
+        });
       }
 
-      taskDetails.sort((a, b) => a.date.localeCompare(b.date));
-
-      items.push({
-        key: `clean:${propIdStr}`, isGroupedClean: true, propertyId: propIdStr, propertyName: propName,
-        label: "Turnover Cleans", quantity: propTasks.length, unitPrice, included: true,
-        taskIds: propTasks.map((t) => String(t.id)), taskNames: propTasks.map((t) => t.name),
-        dates: propTasks.map((t) => fmtDate(t.scheduled_date || t.created_at)),
-        flags, tasks: taskDetails,
-      });
+      // Incomplete turnover cleans become individual EXCLUDED line items for review
+      for (const t of incompleteTasks) {
+        const statusName = t.type_task_status?.name || "Unknown";
+        items.push({
+          key: `task:${t.id}`, isGroupedClean: false, propertyId: propIdStr,
+          propertyName: propName,
+          label: `${t.name} ⚠ ${statusName}`, quantity: 1, unitPrice, included: false,
+          taskIds: [String(t.id)], taskNames: [t.name],
+          dates: [fmtDate(t.scheduled_date || t.created_at)],
+          flags: [{ type: "incomplete", message: `Status: ${statusName}`, taskId: String(t.id) }],
+        });
+      }
     }
 
     // Individual non-turnover tasks
