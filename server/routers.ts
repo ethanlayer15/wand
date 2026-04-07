@@ -512,6 +512,48 @@ export const appRouter = router({
       return syncBreezewayProperties();
     }),
 
+    // Sync tags from Breezeway (fetches each property individually for tag data)
+    syncBreezewayPropertyTags: adminProcedure.mutation(async () => {
+      const client = createBreezewayClient();
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const allProps = await getBreezewayProperties();
+      let updated = 0;
+      let errors = 0;
+
+      // Fetch each property individually to get tags
+      for (const prop of allProps) {
+        try {
+          const detail = await client.get<{
+            id: number;
+            name?: string;
+            tags?: Array<string | { name: string; id?: number }>;
+          }>(`/property/${prop.breezewayId}`);
+
+          if (detail.tags && Array.isArray(detail.tags)) {
+            const tagNames = detail.tags.map((t: any) =>
+              typeof t === "string" ? t : t.name || String(t)
+            );
+            await db
+              .update(breezewayProperties)
+              .set({ tags: JSON.stringify(tagNames) })
+              .where(eq(breezewayProperties.breezewayId, prop.breezewayId));
+            updated++;
+          }
+
+          // Small delay to avoid rate limiting
+          await new Promise((r) => setTimeout(r, 100));
+        } catch (err: any) {
+          console.error(`[Sync] Failed to fetch tags for ${prop.name}: ${err.message}`);
+          errors++;
+        }
+      }
+
+      console.log(`[Sync] Tag sync: ${updated} updated, ${errors} errors out of ${allProps.length} properties`);
+      return { updated, errors, total: allProps.length };
+    }),
+
     // Sync only Breezeway team
     syncBreezewayTeam: adminProcedure.mutation(async () => {
       return syncBreezewayTeam();

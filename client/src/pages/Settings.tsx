@@ -115,6 +115,21 @@ export default function Settings() {
       },
     });
 
+  const syncBreezewayTagsMutation =
+    trpc.integrations.syncBreezewayPropertyTags.useMutation({
+      onSuccess: (data) => {
+        toast.success(
+          `Tags synced: ${data.updated}/${data.total} properties${data.errors > 0 ? ` (${data.errors} errors)` : ""}`
+        );
+        setSyncInProgress(null);
+        refetch();
+      },
+      onError: (err) => {
+        toast.error(`Failed to sync tags: ${err.message}`);
+        setSyncInProgress(null);
+      },
+    });
+
   const syncBreezewayTeamMutation =
     trpc.integrations.syncBreezewayTeam.useMutation({
       onSuccess: (data) => {
@@ -195,6 +210,9 @@ export default function Settings() {
       case "breezeway-properties":
         syncBreezewayPropertiesMutation.mutate();
         break;
+      case "breezeway-tags":
+        syncBreezewayTagsMutation.mutate();
+        break;
       case "breezeway-team":
         syncBreezewayTeamMutation.mutate();
         break;
@@ -268,6 +286,11 @@ export default function Settings() {
           label: "Sync Properties",
           onClick: () => handleSync("breezeway-properties"),
           loading: syncInProgress === "breezeway-properties",
+        },
+        {
+          label: "Sync Tags",
+          onClick: () => handleSync("breezeway-tags"),
+          loading: syncInProgress === "breezeway-tags",
         },
         {
           label: "Sync Team",
