@@ -646,22 +646,24 @@ export async function upsertBreezewayProperty(
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  // Build update set — only include tags if explicitly provided (avoid overwriting with null)
+  const updateSet: Record<string, any> = {
+    name: property.name,
+    referencePropertyId: property.referencePropertyId,
+    address: property.address,
+    city: property.city,
+    state: property.state,
+    status: property.status,
+    photoUrl: property.photoUrl,
+    syncedAt: new Date(),
+  };
+  if (property.tags !== undefined) {
+    updateSet.tags = property.tags;
+  }
   await db
     .insert(breezewayProperties)
     .values(property)
-    .onDuplicateKeyUpdate({
-      set: {
-        name: property.name,
-        referencePropertyId: property.referencePropertyId,
-        address: property.address,
-        city: property.city,
-        state: property.state,
-        status: property.status,
-        photoUrl: property.photoUrl,
-        tags: property.tags,
-        syncedAt: new Date(),
-      },
-    });
+    .onDuplicateKeyUpdate({ set: updateSet });
 }
 
 export async function upsertBreezewayTeamMember(

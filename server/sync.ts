@@ -162,10 +162,10 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
     for (const prop of allProperties) {
       try {
         const defaultPhoto = prop.photos?.find((p: any) => p.default);
-        // Preserve tags from Breezeway if available
-        const propTags = Array.isArray(prop.tags)
-          ? JSON.stringify(prop.tags.map((t: any) => typeof t === "string" ? t : t.name || String(t)))
-          : "[]";
+        // Tags from Breezeway API (if available)
+        const apiTags = Array.isArray(prop.tags)
+          ? prop.tags.map((t: any) => typeof t === "string" ? t : t.name || String(t))
+          : null;
         await upsertBreezewayProperty({
           breezewayId: String(prop.id),
           referencePropertyId: prop.reference_property_id ? String(prop.reference_property_id) : null,
@@ -175,7 +175,8 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
           state: prop.state ?? null,
           status: prop.status === "active" ? "active" : "inactive",
           photoUrl: defaultPhoto?.url ?? null,
-          tags: propTags,
+          // Only set tags if API returned them; otherwise preserve existing DB tags
+          ...(apiTags && apiTags.length > 0 ? { tags: JSON.stringify(apiTags) } : {}),
           syncedAt: new Date(),
         });
         synced++;
