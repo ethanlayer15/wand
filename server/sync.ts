@@ -137,15 +137,35 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
   let errors = 0;
   try {
     const client = createBreezewayClient();
-    const response = await client.get<{
-      results?: any[];
-    }>("/property", { limit: 200, page: 1 });
 
-    const properties = response.results || [];
+    // Paginate through ALL properties (not just the first 200)
+    const PAGE_LIMIT = 200;
+    let page = 1;
+    let allProperties: any[] = [];
 
-    for (const prop of properties) {
+    while (true) {
+      const response = await client.get<{
+        results?: any[];
+        total_pages?: number;
+      }>("/property", { limit: PAGE_LIMIT, page });
+
+      const properties = response.results || [];
+      allProperties = allProperties.concat(properties);
+      console.log(`[Sync] Breezeway properties page ${page}: ${properties.length} results`);
+
+      if (properties.length === 0 || (response.total_pages !== undefined && page >= response.total_pages)) break;
+      page++;
+    }
+
+    console.log(`[Sync] Total Breezeway properties fetched: ${allProperties.length}`);
+
+    for (const prop of allProperties) {
       try {
         const defaultPhoto = prop.photos?.find((p: any) => p.default);
+        // Preserve tags from Breezeway if available
+        const propTags = Array.isArray(prop.tags)
+          ? JSON.stringify(prop.tags.map((t: any) => typeof t === "string" ? t : t.name || String(t)))
+          : "[]";
         await upsertBreezewayProperty({
           breezewayId: String(prop.id),
           referencePropertyId: prop.reference_property_id ? String(prop.reference_property_id) : null,
@@ -155,7 +175,7 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
           state: prop.state ?? null,
           status: prop.status === "active" ? "active" : "inactive",
           photoUrl: defaultPhoto?.url ?? null,
-          tags: "[]",
+          tags: propTags,
           syncedAt: new Date(),
         });
         synced++;
