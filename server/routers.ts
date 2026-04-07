@@ -712,44 +712,64 @@ export const appRouter = router({
             const queryableProperties = targetProperties.filter((p) => p.referencePropertyId);
             console.log(`[Breezeway] ${queryableProperties.length}/${targetProperties.length} target properties have referencePropertyId`);
 
-            // Controlled parallel fetch: 5 properties at a time with 150ms delay between batches
-            // Balances speed (~1-2 min for 54 properties) vs rate limiting
-            const BATCH_SIZE = 5;
-            const INTER_BATCH_DELAY_MS = 150;
+            // Controlled parallel fetch with retry logic
+            // Reduced batch size + longer delay to avoid Breezeway rate limits
+            const BATCH_SIZE = 3;
+            const INTER_BATCH_DELAY_MS = 500;
+            const MAX_RETRIES = 2;
             const allTasks: BwTask[] = [];
             let fetchErrors = 0;
 
             for (let i = 0; i < queryableProperties.length; i += BATCH_SIZE) {
               const batch = queryableProperties.slice(i, i + BATCH_SIZE);
-              const batchResults = await Promise.allSettled(
-                batch.map((prop) => fetchAllPagesForProperty(prop.referencePropertyId!))
-              );
 
-              for (let j = 0; j < batchResults.length; j++) {
-                const result = batchResults[j];
-                if (result.status === 'fulfilled') {
-                  allTasks.push(...result.value);
-                } else {
-                  fetchErrors++;
-                  const propName = batch[j]?.name ?? 'unknown';
-                  const errMsg = result.reason?.message ?? String(result.reason);
-                  console.error(`[Breezeway] Failed to fetch tasks for ${propName}: ${errMsg}`);
-                  // If rate limited, pause and retry the whole batch once
-                  if (errMsg.includes('429') || errMsg.includes('rate limit')) {
-                    console.warn(`[Breezeway] Rate limited — waiting 30s before continuing...`);
-                    await new Promise((resolve) => setTimeout(resolve, 30000));
+              // Track which properties in this batch still need fetching
+              let pendingProps = batch.map((prop, idx) => ({ prop, idx }));
+              let attempt = 0;
+
+              while (pendingProps.length > 0 && attempt <= MAX_RETRIES) {
+                if (attempt > 0) {
+                  const retryDelay = attempt * 15000; // 15s, 30s
+                  console.warn(`[Breezeway] Retry attempt ${attempt}/${MAX_RETRIES} for ${pendingProps.length} properties — waiting ${retryDelay / 1000}s...`);
+                  await new Promise((resolve) => setTimeout(resolve, retryDelay));
+                }
+
+                const batchResults = await Promise.allSettled(
+                  pendingProps.map(({ prop }) => fetchAllPagesForProperty(prop.referencePropertyId!))
+                );
+
+                const stillFailing: typeof pendingProps = [];
+                for (let j = 0; j < batchResults.length; j++) {
+                  const result = batchResults[j];
+                  if (result.status === 'fulfilled') {
+                    allTasks.push(...result.value);
+                  } else {
+                    const propName = pendingProps[j].prop.name ?? 'unknown';
+                    const errMsg = result.reason?.message ?? String(result.reason);
+                    const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
+
+                    if (isRateLimit && attempt < MAX_RETRIES) {
+                      console.warn(`[Breezeway] Rate limited fetching ${propName} — will retry`);
+                      stillFailing.push(pendingProps[j]);
+                    } else {
+                      fetchErrors++;
+                      console.error(`[Breezeway] Failed to fetch tasks for ${propName} (attempt ${attempt + 1}): ${errMsg}`);
+                    }
                   }
                 }
+
+                pendingProps = stillFailing;
+                attempt++;
               }
 
-              // Small delay between batches to be polite to the API
+              // Delay between batches to be polite to the API
               if (i + BATCH_SIZE < queryableProperties.length) {
                 await new Promise((resolve) => setTimeout(resolve, INTER_BATCH_DELAY_MS));
               }
             }
 
             if (fetchErrors > 0) {
-              console.warn(`[Breezeway] ${fetchErrors}/${queryableProperties.length} properties failed to fetch`);
+              console.warn(`[Breezeway] ${fetchErrors}/${queryableProperties.length} properties failed to fetch after retries`);
             }
 
             // Post-fetch filtering — apply date range and status as safety net
