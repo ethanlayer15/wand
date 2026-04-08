@@ -553,15 +553,18 @@ export const appRouter = router({
         return { updated: 0, errors: 0, total: allProps.length, sampleDebug: sampleDebug.substring(0, 500) };
       }
 
-      // Fetch tags for each property using the working endpoint pattern
+      // Fetch tags for each property
+      let sampleResponses: string[] = [];
       for (const prop of allProps) {
         try {
-          const tagResult = await client.get<any>(`/property/${prop.breezewayId}/tag`);
+          const tagResult = await client.get<any>(`/property/${prop.breezewayId}/tags`);
           const tagData = Array.isArray(tagResult) ? tagResult
             : tagResult?.results || tagResult?.tags || [];
 
-          if (updated < 3) {
-            console.log(`[TagSync] ${prop.name} tags: ${JSON.stringify(tagData).substring(0, 300)}`);
+          // Log a few samples to debug
+          if (sampleResponses.length < 5) {
+            sampleResponses.push(`${prop.name}: ${JSON.stringify(tagResult).substring(0, 150)}`);
+            console.log(`[TagSync] ${prop.name} raw response: ${JSON.stringify(tagResult).substring(0, 300)}`);
           }
 
           if (Array.isArray(tagData) && tagData.length > 0) {
@@ -583,7 +586,7 @@ export const appRouter = router({
       }
 
       console.log(`[TagSync] Complete: ${updated} updated, ${errors} errors / ${allProps.length} total`);
-      return { updated, errors, total: allProps.length, sampleDebug: sampleDebug.substring(0, 500) };
+      return { updated, errors, total: allProps.length, sampleDebug: sampleResponses.join(' | ').substring(0, 500) };
     }),
 
     // Sync only Breezeway team
