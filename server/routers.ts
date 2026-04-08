@@ -528,13 +528,7 @@ export const appRouter = router({
         try {
           const sample = await client.get<any>(`/property/${allProps[0].breezewayId}`);
           const keys = Object.keys(sample);
-          sampleDebug = `Keys: ${keys.join(', ')}`;
-          // Check common tag field names
-          for (const key of ['tags', 'tag', 'labels', 'categories', 'property_tags', 'type_tags']) {
-            if (sample[key] !== undefined) {
-              sampleDebug += ` | ${key}: ${JSON.stringify(sample[key]).substring(0, 200)}`;
-            }
-          }
+          sampleDebug = `groups: ${JSON.stringify(sample.groups).substring(0, 300)}`;
           // Also log the full response for first property (truncated)
           console.log(`[TagSync] Sample property ${allProps[0].name} (${allProps[0].breezewayId}) response keys: ${keys.join(', ')}`);
           console.log(`[TagSync] Sample full response (truncated): ${JSON.stringify(sample).substring(0, 1000)}`);
@@ -550,11 +544,16 @@ export const appRouter = router({
 
           // Breezeway stores tags as "groups"
           const tagData = detail.groups;
+          // Log first few for debugging
+          if (tagData && updated < 3) {
+            console.log(`[TagSync] ${prop.name} groups raw: ${JSON.stringify(tagData).substring(0, 500)}`);
+          }
 
           if (tagData && Array.isArray(tagData) && tagData.length > 0) {
             const tagNames = tagData.map((t: any) =>
               typeof t === "string" ? t : t.name || t.label || String(t)
             );
+            if (updated < 3) console.log(`[TagSync] ${prop.name} parsed tags: ${JSON.stringify(tagNames)}`);
             await db
               .update(breezewayProperties)
               .set({ tags: JSON.stringify(tagNames) })
