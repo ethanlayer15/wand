@@ -548,8 +548,8 @@ export const appRouter = router({
         try {
           const detail = await client.get<any>(`/property/${prop.breezewayId}`);
 
-          // Try multiple possible tag field names
-          const tagData = detail.tags || detail.tag || detail.labels || detail.property_tags || detail.type_tags;
+          // Breezeway stores tags as "groups"
+          const tagData = detail.groups;
 
           if (tagData && Array.isArray(tagData) && tagData.length > 0) {
             const tagNames = tagData.map((t: any) =>
