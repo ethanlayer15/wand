@@ -522,18 +522,38 @@ export const appRouter = router({
       let updated = 0;
       let errors = 0;
 
+      // First, sample one property to discover where tags live in the API response
+      let sampleDebug = "";
+      if (allProps.length > 0) {
+        try {
+          const sample = await client.get<any>(`/property/${allProps[0].breezewayId}`);
+          const keys = Object.keys(sample);
+          sampleDebug = `Keys: ${keys.join(', ')}`;
+          // Check common tag field names
+          for (const key of ['tags', 'tag', 'labels', 'categories', 'property_tags', 'type_tags']) {
+            if (sample[key] !== undefined) {
+              sampleDebug += ` | ${key}: ${JSON.stringify(sample[key]).substring(0, 200)}`;
+            }
+          }
+          // Also log the full response for first property (truncated)
+          console.log(`[TagSync] Sample property ${allProps[0].name} (${allProps[0].breezewayId}) response keys: ${keys.join(', ')}`);
+          console.log(`[TagSync] Sample full response (truncated): ${JSON.stringify(sample).substring(0, 1000)}`);
+        } catch (err: any) {
+          sampleDebug = `Sample fetch error: ${err.message}`;
+        }
+      }
+
       // Fetch each property individually to get tags
       for (const prop of allProps) {
         try {
-          const detail = await client.get<{
-            id: number;
-            name?: string;
-            tags?: Array<string | { name: string; id?: number }>;
-          }>(`/property/${prop.breezewayId}`);
+          const detail = await client.get<any>(`/property/${prop.breezewayId}`);
 
-          if (detail.tags && Array.isArray(detail.tags)) {
-            const tagNames = detail.tags.map((t: any) =>
-              typeof t === "string" ? t : t.name || String(t)
+          // Try multiple possible tag field names
+          const tagData = detail.tags || detail.tag || detail.labels || detail.property_tags || detail.type_tags;
+
+          if (tagData && Array.isArray(tagData) && tagData.length > 0) {
+            const tagNames = tagData.map((t: any) =>
+              typeof t === "string" ? t : t.name || t.label || String(t)
             );
             await db
               .update(breezewayProperties)
@@ -551,7 +571,7 @@ export const appRouter = router({
       }
 
       console.log(`[Sync] Tag sync: ${updated} updated, ${errors} errors out of ${allProps.length} properties`);
-      return { updated, errors, total: allProps.length };
+      return { updated, errors, total: allProps.length, sampleDebug };
     }),
 
     // Sync only Breezeway team

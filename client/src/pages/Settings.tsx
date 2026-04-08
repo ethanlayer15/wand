@@ -117,9 +117,10 @@ export default function Settings() {
 
   const syncBreezewayTagsMutation =
     trpc.integrations.syncBreezewayPropertyTags.useMutation({
-      onSuccess: (data) => {
+      onSuccess: (data: any) => {
         toast.success(
-          `Tags synced: ${data.updated}/${data.total} properties${data.errors > 0 ? ` (${data.errors} errors)` : ""}`
+          `Tags synced: ${data.updated}/${data.total} properties${data.errors > 0 ? ` (${data.errors} errors)` : ""}`,
+          { description: data.sampleDebug ? `Debug: ${data.sampleDebug}` : undefined, duration: 15000 }
         );
         setSyncInProgress(null);
         refetch();
