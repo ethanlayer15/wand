@@ -512,7 +512,8 @@ export const appRouter = router({
       return syncBreezewayProperties();
     }),
 
-    // Sync tags from Breezeway (fetches each property individually for tag data)
+    // Sync property tags from Breezeway
+    // Breezeway has "Property tags" (separate from "Groups") — accessible via /property/{id}/tag
     syncBreezewayPropertyTags: adminProcedure.mutation(async () => {
       const client = createBreezewayClient();
       const db = await getDb();
@@ -521,39 +522,52 @@ export const appRouter = router({
       const allProps = await getBreezewayProperties();
       let updated = 0;
       let errors = 0;
-
-      // First, sample one property to discover where tags live in the API response
       let sampleDebug = "";
-      if (allProps.length > 0) {
+
+      // Try to discover the right endpoint using first property
+      const testPropId = allProps[0]?.breezewayId;
+      const endpointsToTry = [
+        { url: `/property/${testPropId}/tag`, label: "/property/{id}/tag" },
+        { url: `/property/${testPropId}/tags`, label: "/property/{id}/tags" },
+        { url: `/tag`, label: "/tag" },
+        { url: `/tags`, label: "/tags" },
+        { url: `/property_tag`, label: "/property_tag" },
+      ];
+
+      let workingEndpoint = "";
+      for (const ep of endpointsToTry) {
         try {
-          const sample = await client.get<any>(`/property/${allProps[0].breezewayId}`);
-          const keys = Object.keys(sample);
-          sampleDebug = `groups: ${JSON.stringify(sample.groups).substring(0, 300)}`;
-          // Also log the full response for first property (truncated)
-          console.log(`[TagSync] Sample property ${allProps[0].name} (${allProps[0].breezewayId}) response keys: ${keys.join(', ')}`);
-          console.log(`[TagSync] Sample full response (truncated): ${JSON.stringify(sample).substring(0, 1000)}`);
+          const result = await client.get<any>(ep.url);
+          const resultStr = JSON.stringify(result).substring(0, 200);
+          sampleDebug += `${ep.label}: OK ${resultStr} | `;
+          console.log(`[TagSync] ${ep.label} returned: ${resultStr}`);
+          workingEndpoint = ep.label;
+          break;
         } catch (err: any) {
-          sampleDebug = `Sample fetch error: ${err.message}`;
+          const errMsg = err.message?.substring(0, 60) || "unknown";
+          sampleDebug += `${ep.label}: ${errMsg} | `;
         }
       }
 
-      // Fetch each property individually to get tags
+      if (!workingEndpoint) {
+        return { updated: 0, errors: 0, total: allProps.length, sampleDebug: sampleDebug.substring(0, 500) };
+      }
+
+      // Fetch tags for each property using the working endpoint pattern
       for (const prop of allProps) {
         try {
-          const detail = await client.get<any>(`/property/${prop.breezewayId}`);
+          const tagResult = await client.get<any>(`/property/${prop.breezewayId}/tag`);
+          const tagData = Array.isArray(tagResult) ? tagResult
+            : tagResult?.results || tagResult?.tags || [];
 
-          // Breezeway stores tags as "groups"
-          const tagData = detail.groups;
-          // Log first few for debugging
-          if (tagData && updated < 3) {
-            console.log(`[TagSync] ${prop.name} groups raw: ${JSON.stringify(tagData).substring(0, 500)}`);
+          if (updated < 3) {
+            console.log(`[TagSync] ${prop.name} tags: ${JSON.stringify(tagData).substring(0, 300)}`);
           }
 
-          if (tagData && Array.isArray(tagData) && tagData.length > 0) {
+          if (Array.isArray(tagData) && tagData.length > 0) {
             const tagNames = tagData.map((t: any) =>
               typeof t === "string" ? t : t.name || t.label || String(t)
             );
-            if (updated < 3) console.log(`[TagSync] ${prop.name} parsed tags: ${JSON.stringify(tagNames)}`);
             await db
               .update(breezewayProperties)
               .set({ tags: JSON.stringify(tagNames) })
@@ -561,16 +575,15 @@ export const appRouter = router({
             updated++;
           }
 
-          // Small delay to avoid rate limiting
           await new Promise((r) => setTimeout(r, 100));
         } catch (err: any) {
-          console.error(`[Sync] Failed to fetch tags for ${prop.name}: ${err.message}`);
           errors++;
+          if (errors <= 3) console.error(`[TagSync] Failed for ${prop.name}: ${err.message}`);
         }
       }
 
-      console.log(`[Sync] Tag sync: ${updated} updated, ${errors} errors out of ${allProps.length} properties`);
-      return { updated, errors, total: allProps.length, sampleDebug };
+      console.log(`[TagSync] Complete: ${updated} updated, ${errors} errors / ${allProps.length} total`);
+      return { updated, errors, total: allProps.length, sampleDebug: sampleDebug.substring(0, 500) };
     }),
 
     // Sync only Breezeway team
