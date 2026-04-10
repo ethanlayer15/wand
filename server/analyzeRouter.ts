@@ -146,10 +146,13 @@ export const analyzeRouter = router({
       .slice(0, 10)
       .map(([type, count]) => ({ type, count }));
 
-    // Average rating — normalize to 5-star scale
+    // Average rating — normalize to 5-star scale.
+    // reviewStatus may be null for older synced reviews (Hostaway doesn't always
+    // populate it). The sync pipeline already filters out non-published reviews
+    // at insert time, so null here is safe to treat as published.
     const ratedReviews = reviews.filter(
       (r) => r.rating != null &&
-             r.reviewStatus === "published" &&
+             (r.reviewStatus === "published" || r.reviewStatus == null) &&
              (r.reviewType === "guest-to-host" || r.reviewType == null)
     );
     const avgRating = ratedReviews.length > 0
