@@ -31,6 +31,14 @@ function normalizeRating(rating: number | null | undefined): number {
   return rating > 5 ? rating / 2 : rating;
 };
 
+// Best-available date for a review: prefer Hostaway's actual submittedAt,
+// fall back to our DB createdAt when Hostaway didn't provide one.
+// Some older synced reviews have null submittedAt; without this fallback
+// they'd silently drop out of every time-based filter (e.g. "This Quarter").
+function reviewDate(r: { submittedAt?: Date | null; createdAt?: Date | null }): Date | null {
+  return r.submittedAt ?? r.createdAt ?? null;
+}
+
 export const analyzeRouter = router({
   // ── Overview ─────────────────────────────────────────────────────────
   overview: publicProcedure
@@ -87,22 +95,23 @@ export const analyzeRouter = router({
       timeEnd.setHours(23, 59, 59, 999);
     }
 
-    // Filter reviews — use submittedAt (actual review date) for time filtering
-    // When a time filter is active, exclude reviews without submittedAt (unknown actual date)
+    // Filter reviews — use submittedAt (actual review date) for time filtering,
+    // falling back to createdAt for reviews where Hostaway didn't populate it.
     let reviews = allReviews;
     if (filteredListingIds) {
       reviews = reviews.filter((r) => filteredListingIds!.has(r.listingId));
     }
-    const hasTimeFilter = !!(timeCutoff || timeEnd);
-    if (hasTimeFilter) {
-      // Only include reviews with a known submission date when filtering by time
-      reviews = reviews.filter((r) => r.submittedAt != null);
-    }
     if (timeCutoff) {
-      reviews = reviews.filter((r) => r.submittedAt! >= timeCutoff!);
+      reviews = reviews.filter((r) => {
+        const d = reviewDate(r);
+        return d != null && d >= timeCutoff!;
+      });
     }
     if (timeEnd) {
-      reviews = reviews.filter((r) => r.submittedAt! <= timeEnd!);
+      reviews = reviews.filter((r) => {
+        const d = reviewDate(r);
+        return d != null && d <= timeEnd!;
+      });
     }
 
     // Filter analyses to match
@@ -267,8 +276,8 @@ export const analyzeRouter = router({
         // Only count published guest reviews (matches Hostaway dashboard filter)
         if (r.reviewStatus !== "published" && r.reviewStatus != null) continue;
         if (r.reviewType != null && r.reviewType !== "guest-to-host") continue;
-        const date = r.submittedAt;
-        if (!date) continue; // Skip reviews without known submission date
+        const date = reviewDate(r);
+        if (!date) continue; // Skip reviews without any known date
         if (date < cutoff) continue;
         if (endCutoff && date > endCutoff) continue;
 
@@ -413,12 +422,19 @@ export const analyzeRouter = router({
 
       let result = reviewsWithAnalysis as typeof reviewsWithAnalysis;
 
-      // Apply date filters — use submittedAt (actual review date); exclude reviews without it
-      if (timeCutoff || timeEnd) {
-        result = result.filter((r) => (r as any).submittedAt != null);
+      // Apply date filters — prefer submittedAt, fall back to createdAt
+      if (timeCutoff) {
+        result = result.filter((r) => {
+          const d = reviewDate(r as any);
+          return d != null && d >= timeCutoff!;
+        });
       }
-      if (timeCutoff) result = result.filter((r) => new Date((r as any).submittedAt) >= timeCutoff!);
-      if (timeEnd) result = result.filter((r) => new Date((r as any).submittedAt) <= timeEnd!);
+      if (timeEnd) {
+        result = result.filter((r) => {
+          const d = reviewDate(r as any);
+          return d != null && d <= timeEnd!;
+        });
+      }
 
       // Filter by severity if specified
       if (input.severity) {
@@ -472,17 +488,20 @@ export const analyzeRouter = router({
       reviews = reviews.filter((r) => filteredListingIds!.has(r.listingId));
       analyses = analyses.filter((a) => filteredListingIds!.has(a.listingId));
     }
-    // When time filter is active, exclude reviews without submittedAt
-    if (timeCutoff || timeEnd) {
-      reviews = reviews.filter((r) => r.submittedAt != null);
-    }
+    // Time filter — prefer submittedAt, fall back to createdAt
     if (timeCutoff) {
-      reviews = reviews.filter((r) => r.submittedAt! >= timeCutoff!);
+      reviews = reviews.filter((r) => {
+        const d = reviewDate(r);
+        return d != null && d >= timeCutoff!;
+      });
       const reviewIdSet = new Set(reviews.map((r) => r.id));
       analyses = analyses.filter((a) => reviewIdSet.has(a.reviewId));
     }
     if (timeEnd) {
-      reviews = reviews.filter((r) => r.submittedAt! <= timeEnd!);
+      reviews = reviews.filter((r) => {
+        const d = reviewDate(r);
+        return d != null && d <= timeEnd!;
+      });
       const reviewIdSet = new Set(reviews.map((r) => r.id));
       analyses = analyses.filter((a) => reviewIdSet.has(a.reviewId));
     }
@@ -585,26 +604,31 @@ export const analyzeRouter = router({
         reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => podListingIds.has(r.listingId));
       }
 
-      // Apply date filters — exclude reviews without submittedAt when time filter is active
-      const hasTimeFeedFilter = (input.timeRange && input.timeRange !== "all") || input.startDate || input.endDate;
-      if (hasTimeFeedFilter) {
-        reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => (r as any).submittedAt != null);
-      }
+      // Apply date filters — prefer submittedAt, fall back to createdAt
       if (input.timeRange && input.timeRange !== "all") {
         let timeCutoff: Date | null = null;
         const now = new Date();
         if (input.timeRange === "30d") timeCutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         else if (input.timeRange === "quarter") { const q = Math.floor(now.getMonth() / 3); timeCutoff = new Date(now.getFullYear(), q * 3, 1); }
         else if (input.timeRange === "year") timeCutoff = new Date(now.getFullYear(), 0, 1);
-        if (timeCutoff) reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => new Date((r as any).submittedAt) >= timeCutoff!);
+        if (timeCutoff) reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => {
+          const d = reviewDate(r as any);
+          return d != null && d >= timeCutoff!;
+        });
       }
       if (input.startDate) {
         const cutoff = new Date(input.startDate);
-        reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => new Date((r as any).submittedAt) >= cutoff);
+        reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => {
+          const d = reviewDate(r as any);
+          return d != null && d >= cutoff;
+        });
       }
       if (input.endDate) {
         const endCutoff = new Date(new Date(input.endDate).setHours(23, 59, 59, 999));
-        reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => new Date((r as any).submittedAt) <= endCutoff);
+        reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => {
+          const d = reviewDate(r as any);
+          return d != null && d <= endCutoff;
+        });
       }
 
       // Apply filters

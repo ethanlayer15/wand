@@ -94,6 +94,9 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         }
       }
     }
+    console.log(
+      `[CleanSync] ${properties.length} total properties · ${properties.filter((p) => p.referencePropertyId).length} with referencePropertyId · ${properties.length - properties.filter((p) => p.referencePropertyId).length} home_id-only (fallback)`
+    );
 
     // 2. breezewayTeam.breezewayId → cleaners (via cleaners.breezewayTeamId)
     const allCleaners = await getCleaners();
@@ -118,7 +121,10 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     const existingTaskIds = new Set(existingCleans.map((c) => c.breezewayTaskId));
 
     // 4. Fetch completed housekeeping tasks from Breezeway
-    const queryableProperties = properties.filter((p) => p.referencePropertyId);
+    // Use reference_property_id when available (faster), fall back to home_id (breezewayId)
+    // for properties that don't have a referencePropertyId set. This mirrors the LeisrBilling
+    // fix pattern — previously we dropped all properties without referencePropertyId.
+    const queryableProperties = properties;
     let allTasks: BreezewayTaskResponse[] = [];
 
     for (const property of queryableProperties) {
@@ -127,15 +133,20 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         let hasMore = true;
 
         while (hasMore) {
-          const response = await client.get<{
-            results?: BreezewayTaskResponse[];
-            total_pages?: number;
-          }>("/task/", {
-            reference_property_id: property.referencePropertyId,
+          const params: Record<string, any> = {
             type_department: "housekeeping",
             limit: 100,
             page,
-          });
+          };
+          if (property.referencePropertyId) {
+            params.reference_property_id = property.referencePropertyId;
+          } else {
+            params.home_id = Number(property.breezewayId);
+          }
+          const response = await client.get<{
+            results?: BreezewayTaskResponse[];
+            total_pages?: number;
+          }>("/task/", params);
 
           const tasks = response.results || [];
           // Filter to only completed/finished tasks

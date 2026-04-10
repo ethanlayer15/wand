@@ -25,6 +25,7 @@ import {
   registerBreezewayWebhooks,
   listBreezewayWebhooks,
 } from "./sync";
+import { backfillCleanlinessRatings } from "./reviewPipeline";
 import { publicProcedure, protectedProcedure, managerProcedure, adminProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { systemRouter } from "./_core/systemRouter";
@@ -505,6 +506,12 @@ export const appRouter = router({
     // Sync only Hostaway reviews
     syncHostawayReviews: adminProcedure.mutation(async () => {
       return syncHostawayReviews();
+    }),
+
+    // Backfill cleanliness sub-scores for existing reviews (null cleanlinessRating)
+    // Fixes a bug where Hostaway's reviewCategory array wasn't being read correctly.
+    backfillCleanlinessRatings: adminProcedure.mutation(async () => {
+      return backfillCleanlinessRatings();
     }),
 
     // Sync only Breezeway properties

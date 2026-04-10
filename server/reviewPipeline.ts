@@ -86,12 +86,27 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
       else source = "direct";
     }
 
-    // Extract Airbnb cleanliness sub-score from category ratings
-    // Hostaway returns categoryRatings as an object like { cleanliness: 5, accuracy: 4, ... }
+    // Extract Airbnb cleanliness sub-score.
+    // Hostaway actually returns sub-scores in a `reviewCategory` array (singular)
+    // of { category: "cleanliness", rating: N } objects — NOT the nested
+    // `categoryRatings` / `subRatings` objects we were previously checking.
+    // Airbnb uses a 10-point scale; normalize to 5-point for consistency.
     let cleanlinessRating: number | null = null;
-    if (review.categoryRatings?.cleanliness) {
+    if (Array.isArray(review.reviewCategory)) {
+      const cleanCat = review.reviewCategory.find(
+        (c: any) => c && typeof c.category === "string" && c.category.toLowerCase() === "cleanliness"
+      );
+      if (cleanCat?.rating != null) {
+        const raw = Number(cleanCat.rating);
+        if (!Number.isNaN(raw)) {
+          cleanlinessRating = raw > 5 ? Math.round(raw / 2) : raw;
+        }
+      }
+    }
+    // Legacy fallbacks — older Hostaway payload shapes we used to see
+    if (cleanlinessRating == null && review.categoryRatings?.cleanliness) {
       cleanlinessRating = Number(review.categoryRatings.cleanliness);
-    } else if (review.subRatings?.cleanliness) {
+    } else if (cleanlinessRating == null && review.subRatings?.cleanliness) {
       cleanlinessRating = Number(review.subRatings.cleanliness);
     }
 
@@ -126,6 +141,59 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
 
   console.log(`[ReviewPipeline] Synced ${synced} new reviews (${allReviews.length} total from Hostaway)`);
   return { synced, total: allReviews.length };
+}
+
+// ── Step 1a: Backfill cleanliness sub-scores ──────────────────────────
+
+/**
+ * One-shot backfill for reviews that were synced before the cleanliness
+ * sub-score extraction bug was fixed. Re-fetches all reviews from Hostaway
+ * and updates cleanlinessRating for rows where it's null but the Hostaway
+ * payload has a `reviewCategory` entry with `category: "cleanliness"`.
+ *
+ * Safe to run multiple times — only updates rows with null cleanlinessRating.
+ */
+export async function backfillCleanlinessRatings(): Promise<{ updated: number; scanned: number }> {
+  const db = await getDb();
+  if (!db) return { updated: 0, scanned: 0 };
+
+  const client = getHostawayClient();
+  const allReviews = await client.getAllReviews();
+  console.log(`[ReviewPipeline:backfill] Fetched ${allReviews.length} reviews from Hostaway`);
+
+  let updated = 0;
+  let scanned = 0;
+
+  for (const review of allReviews) {
+    scanned++;
+    if (!Array.isArray(review.reviewCategory)) continue;
+    const cleanCat = review.reviewCategory.find(
+      (c: any) => c && typeof c.category === "string" && c.category.toLowerCase() === "cleanliness"
+    );
+    if (cleanCat?.rating == null) continue;
+    const raw = Number(cleanCat.rating);
+    if (Number.isNaN(raw)) continue;
+    const normalized = raw > 5 ? Math.round(raw / 2) : raw;
+
+    try {
+      const result = await db
+        .update(reviews)
+        .set({ cleanlinessRating: normalized })
+        .where(
+          and(
+            eq(reviews.hostawayReviewId, String(review.id)),
+            isNull(reviews.cleanlinessRating)
+          )
+        );
+      const affected = (result as any)[0]?.affectedRows ?? 0;
+      if (affected > 0) updated++;
+    } catch (err: any) {
+      console.error(`[ReviewPipeline:backfill] Failed to update review ${review.id}:`, err.message);
+    }
+  }
+
+  console.log(`[ReviewPipeline:backfill] Updated ${updated} reviews (scanned ${scanned})`);
+  return { updated, scanned };
 }
 
 // ── Step 1b: Mark pre-2026 reviews as analyzed ─────────────────────────
