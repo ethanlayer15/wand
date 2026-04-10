@@ -609,6 +609,37 @@ function CleanersManagementTab() {
     },
     onError: (err) => toast.error(err.message),
   });
+  const scoreDiagnosticQuery = trpc.compensation.cleaners.scoreDiagnostic.useQuery(undefined, {
+    enabled: false, // fetch only on demand
+  });
+  const runDiagnostic = async () => {
+    const { data, error } = await scoreDiagnosticQuery.refetch();
+    if (error) {
+      toast.error(`Diagnostic failed: ${error.message}`);
+      return;
+    }
+    if (!data) return;
+    // Build a readable summary
+    const lines = [
+      `🩺 ${data.diagnosis}`,
+      ``,
+      `Cleaners: ${data.cleaners.total} active · ${data.cleaners.withNonNullScore} with score · ${data.cleaners.withScoreCalculated} calculated`,
+      `Completed cleans (45d): ${data.completedCleans.last45Days} total · ${data.completedCleans.withCleanerId} w/ cleanerId · ${data.completedCleans.withListingId} w/ listingId · ${data.completedCleans.fullyMatched} fully matched`,
+      `Latest clean: ${data.completedCleans.latestCleanDate ?? "none"}${data.completedCleans.daysSinceLatest != null ? ` (${data.completedCleans.daysSinceLatest}d ago)` : ""}`,
+      `Reviews (30d): ${data.reviews.last30Days} total · Airbnb w/ cleanliness sub-score: ${data.reviews.airbnbWithCleanlinessSubScore} · AI-analyzed: ${data.reviews.analyzedByAI}`,
+      `  By source: airbnb=${data.reviews.bySource.airbnb} vrbo=${data.reviews.bySource.vrbo} booking=${data.reviews.bySource.booking} direct=${data.reviews.bySource.direct}`,
+      ``,
+      `Top cleaners by clean count:`,
+      ...data.perCleaner.slice(0, 8).map((c) => `  ${c.name}: ${c.cleansLast45Days} cleans · ${c.matchableReviewsLast30Days} matchable reviews · score=${c.currentScore ?? "null"}`),
+    ];
+    const summary = lines.join("\n");
+    // Log the full payload to console for deeper inspection
+    console.log("[ScoreDiagnostic]", data);
+    toast.message("Cleaner Score Diagnostic", {
+      description: summary,
+      duration: 60000,
+    });
+  };
   const sendReportsMutation = trpc.compensation.sendWeeklyReports.useMutation({
     onSuccess: (result) => {
       toast.success(`Sent ${result.sent} reports (${result.skipped} skipped, ${result.failed} failed)`);
@@ -724,6 +755,19 @@ function CleanersManagementTab() {
               <RefreshCw className="h-4 w-4 mr-1" />
             )}
             Recalculate All
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={runDiagnostic}
+            disabled={scoreDiagnosticQuery.isFetching}
+          >
+            {scoreDiagnosticQuery.isFetching ? (
+              <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-1" />
+            )}
+            Diagnose Scores
           </Button>
           <Button
             variant="outline"

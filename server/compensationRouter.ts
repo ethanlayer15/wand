@@ -26,8 +26,8 @@ import {
   getAttributionStats,
 } from "./cleanerAttribution";
 import { getListings, getDb, getCleanerPodIds, setCleanerPods, getAllCleanerPodAssignments } from "./db";
-import { cleaners, listings, completedCleans, pods } from "../drizzle/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis } from "../drizzle/schema";
+import { eq, desc, gte } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
 import { syncCompletedCleans } from "./breezewayCleanSync";
 
@@ -149,6 +149,177 @@ export const compensationRouter = router({
           .where(eq(cleaners.id, cleaner.id));
         return { score, reviewCount, multiplier };
       }),
+
+    /**
+     * Diagnostic endpoint — explains why rolling score recalc is returning null for cleaners.
+     * Returns counts at every step of the scoring pipeline so we can see exactly where it breaks.
+     */
+    scoreDiagnostic: protectedProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const fortyFiveDaysAgo = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
+
+      // 1. Active cleaners
+      const activeCleaners = await db.select().from(cleaners).where(eq(cleaners.active, true));
+
+      // 2. Completed cleans in last 45 days
+      const recentCleans = await db
+        .select()
+        .from(completedCleans)
+        .where(gte(completedCleans.scheduledDate, fortyFiveDaysAgo));
+
+      // How many have a cleanerId set (i.e. matched to a cleaner record)
+      const cleansWithCleanerId = recentCleans.filter((c) => c.cleanerId != null);
+      const cleansWithListingId = recentCleans.filter((c) => c.listingId != null);
+      const cleansFullyMatched = recentCleans.filter(
+        (c) => c.cleanerId != null && c.listingId != null && c.scheduledDate != null
+      );
+
+      // Most recent clean to see staleness
+      const latestCleanRow = await db
+        .select({ date: completedCleans.scheduledDate })
+        .from(completedCleans)
+        .orderBy(desc(completedCleans.scheduledDate))
+        .limit(1);
+      const latestCleanDate = latestCleanRow[0]?.date ?? null;
+
+      // 3. Reviews in last 30 days
+      const recentReviews = await db
+        .select()
+        .from(reviews)
+        .where(gte(reviews.submittedAt, thirtyDaysAgo));
+
+      const reviewsBySource = {
+        airbnb: recentReviews.filter((r) => r.source === "airbnb").length,
+        vrbo: recentReviews.filter((r) => r.source === "vrbo").length,
+        booking: recentReviews.filter((r) => r.source === "booking").length,
+        direct: recentReviews.filter((r) => r.source === "direct").length,
+        other: recentReviews.filter(
+          (r) => !["airbnb", "vrbo", "booking", "direct"].includes(r.source ?? "")
+        ).length,
+      };
+      const airbnbReviewsWithCleanliness = recentReviews.filter(
+        (r) => r.source === "airbnb" && r.cleanlinessRating != null
+      ).length;
+
+      // 4. AI analyses in reviewAnalysis table for recent reviews (non-Airbnb path)
+      const recentReviewIds = new Set(recentReviews.map((r) => r.id));
+      const allAnalyses = await db.select({ reviewId: reviewAnalysis.reviewId }).from(reviewAnalysis);
+      const analyzedRecentCount = allAnalyses.filter((a) => recentReviewIds.has(a.reviewId)).length;
+
+      // 5. Per-cleaner breakdown — how many cleans+reviews would match for each active cleaner
+      const perCleaner: Array<{
+        cleanerId: number;
+        name: string;
+        cleansLast45Days: number;
+        listingsCleanedLast45Days: number;
+        matchableReviewsLast30Days: number;
+        currentScore: string | null;
+        lastCalculated: Date | null;
+      }> = [];
+
+      for (const cleaner of activeCleaners) {
+        const myCleans = recentCleans.filter(
+          (c) => c.cleanerId === cleaner.id && c.listingId != null && c.scheduledDate != null
+        );
+        const myListingIds = new Set(myCleans.map((c) => c.listingId!));
+        const cleansByListing = new Map<number, Date[]>();
+        for (const c of myCleans) {
+          const arr = cleansByListing.get(c.listingId!) || [];
+          arr.push(new Date(c.scheduledDate!));
+          cleansByListing.set(c.listingId!, arr);
+        }
+
+        // Count reviews whose listing matches AND where a clean fell within -1..+3 days
+        let matchable = 0;
+        for (const r of recentReviews) {
+          if (!r.listingId || !myListingIds.has(r.listingId)) continue;
+          const reviewDate = r.arrivalDate
+            ? new Date(r.arrivalDate)
+            : r.submittedAt
+              ? new Date(r.submittedAt)
+              : null;
+          if (!reviewDate) continue;
+          const cleanDates = cleansByListing.get(r.listingId) || [];
+          const found = cleanDates.some((cd) => {
+            const diffDays = (reviewDate.getTime() - cd.getTime()) / (1000 * 60 * 60 * 24);
+            return diffDays >= -1 && diffDays <= 3;
+          });
+          if (found) matchable++;
+        }
+
+        perCleaner.push({
+          cleanerId: cleaner.id,
+          name: cleaner.name,
+          cleansLast45Days: myCleans.length,
+          listingsCleanedLast45Days: myListingIds.size,
+          matchableReviewsLast30Days: matchable,
+          currentScore: cleaner.currentRollingScore,
+          lastCalculated: cleaner.scoreLastCalculatedAt,
+        });
+      }
+
+      // Sort by most cleans first so the most-active cleaners are up top
+      perCleaner.sort((a, b) => b.cleansLast45Days - a.cleansLast45Days);
+
+      // Top-level verdict: the most likely root cause
+      let diagnosis = "";
+      if (activeCleaners.length === 0) {
+        diagnosis = "No active cleaners in the cleaners table.";
+      } else if (recentCleans.length === 0) {
+        diagnosis = "No completedCleans in the last 45 days — breezewayCleanSync may not be running.";
+      } else if (cleansWithCleanerId.length === 0) {
+        diagnosis =
+          "completedCleans exist but NONE have cleanerId set — the Breezeway assignee → cleaner mapping is broken.";
+      } else if (cleansWithListingId.length === 0) {
+        diagnosis =
+          "completedCleans exist but NONE have listingId set — the Breezeway home_id → listing mapping is broken.";
+      } else if (recentReviews.length === 0) {
+        diagnosis = "No reviews in the last 30 days — nothing to score against.";
+      } else if (airbnbReviewsWithCleanliness === 0 && analyzedRecentCount === 0) {
+        diagnosis =
+          "Recent reviews exist but no Airbnb cleanlinessRating and no AI analyses — neither scoring path has data.";
+      } else if (perCleaner.every((p) => p.matchableReviewsLast30Days === 0)) {
+        diagnosis =
+          "Cleans and reviews both exist but NO per-cleaner overlap — clean dates don't line up with review arrival dates (check -1..+3 day window).";
+      } else {
+        diagnosis = "Scoring data looks healthy — check individual cleaner breakdown below.";
+      }
+
+      return {
+        diagnosis,
+        now: now.toISOString(),
+        windows: {
+          reviewWindowStart: thirtyDaysAgo.toISOString(),
+          cleanWindowStart: fortyFiveDaysAgo.toISOString(),
+        },
+        cleaners: {
+          total: activeCleaners.length,
+          withScoreCalculated: activeCleaners.filter((c) => c.scoreLastCalculatedAt != null).length,
+          withNonNullScore: activeCleaners.filter((c) => c.currentRollingScore != null).length,
+        },
+        completedCleans: {
+          last45Days: recentCleans.length,
+          withCleanerId: cleansWithCleanerId.length,
+          withListingId: cleansWithListingId.length,
+          fullyMatched: cleansFullyMatched.length,
+          latestCleanDate: latestCleanDate ? new Date(latestCleanDate).toISOString() : null,
+          daysSinceLatest: latestCleanDate
+            ? Math.round((now.getTime() - new Date(latestCleanDate).getTime()) / (1000 * 60 * 60 * 24))
+            : null,
+        },
+        reviews: {
+          last30Days: recentReviews.length,
+          bySource: reviewsBySource,
+          airbnbWithCleanlinessSubScore: airbnbReviewsWithCleanliness,
+          analyzedByAI: analyzedRecentCount,
+        },
+        perCleaner: perCleaner.slice(0, 30),
+      };
+    }),
   }),
 
   // ── Property Compensation Admin ───────────────────────────────────

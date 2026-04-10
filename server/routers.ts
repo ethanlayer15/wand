@@ -512,8 +512,7 @@ export const appRouter = router({
       return syncBreezewayProperties();
     }),
 
-    // Sync property tags from Breezeway
-    // Breezeway has "Property tags" (separate from "Groups") — accessible via /property/{id}/tag
+    // Sync property tags from Breezeway — tries multiple API approaches
     syncBreezewayPropertyTags: adminProcedure.mutation(async () => {
       const client = createBreezewayClient();
       const db = await getDb();
@@ -522,71 +521,236 @@ export const appRouter = router({
       const allProps = await getBreezewayProperties();
       let updated = 0;
       let errors = 0;
-      let sampleDebug = "";
+      const debugLog: string[] = [];
 
-      // Try to discover the right endpoint using first property
-      const testPropId = allProps[0]?.breezewayId;
-      const endpointsToTry = [
-        { url: `/property/${testPropId}/tag`, label: "/property/{id}/tag" },
-        { url: `/property/${testPropId}/tags`, label: "/property/{id}/tags" },
-        { url: `/tag`, label: "/tag" },
-        { url: `/tags`, label: "/tags" },
-        { url: `/property_tag`, label: "/property_tag" },
-      ];
+      // ── Strategy 1: Try /property list with tag filter ──
+      try {
+        debugLog.push("Strategy 1: /property?tag=Leisr Billing");
+        const taggedResult = await client.get<{ results?: any[]; total_results?: number }>("/property", {
+          tag: "Leisr Billing",
+          limit: 500,
+          page: 1,
+        });
+        const taggedProps = taggedResult.results || [];
+        debugLog.push(`→ Got ${taggedProps.length} properties with tag filter`);
+        console.log(`[TagSync] Strategy 1: /property?tag=Leisr Billing returned ${taggedProps.length} results`);
 
-      let workingEndpoint = "";
-      for (const ep of endpointsToTry) {
-        try {
-          const result = await client.get<any>(ep.url);
-          const resultStr = JSON.stringify(result).substring(0, 200);
-          sampleDebug += `${ep.label}: OK ${resultStr} | `;
-          console.log(`[TagSync] ${ep.label} returned: ${resultStr}`);
-          workingEndpoint = ep.label;
-          break;
-        } catch (err: any) {
-          const errMsg = err.message?.substring(0, 60) || "unknown";
-          sampleDebug += `${ep.label}: ${errMsg} | `;
+        if (taggedProps.length > 0) {
+          // We found tagged properties! Update their tags in DB
+          const taggedIds = new Set(taggedProps.map((p: any) => String(p.id)));
+          for (const prop of allProps) {
+            if (taggedIds.has(prop.breezewayId)) {
+              try {
+                const existingTags: string[] = prop.tags ? JSON.parse(prop.tags as string) : [];
+                if (!existingTags.includes("Leisr Billing")) {
+                  existingTags.push("Leisr Billing");
+                }
+                await db
+                  .update(breezewayProperties)
+                  .set({ tags: JSON.stringify(existingTags) })
+                  .where(eq(breezewayProperties.breezewayId, prop.breezewayId));
+                updated++;
+              } catch { errors++; }
+            }
+          }
+          debugLog.push(`→ Updated ${updated} properties`);
+          return { updated, errors, total: allProps.length, strategy: "property?tag=filter", debugLog: debugLog.join(' | ') };
         }
+      } catch (err: any) {
+        debugLog.push(`→ Failed: ${err.message?.substring(0, 80)}`);
+        console.log(`[TagSync] Strategy 1 failed: ${err.message}`);
       }
 
-      if (!workingEndpoint) {
-        return { updated: 0, errors: 0, total: allProps.length, sampleDebug: sampleDebug.substring(0, 500) };
+      // ── Strategy 2: Try /tags global list to find tag ID, then filter ──
+      try {
+        debugLog.push("Strategy 2: /tags global list");
+        const tagsResult = await client.get<any>("/tags");
+        const rawStr = JSON.stringify(tagsResult).substring(0, 300);
+        debugLog.push(`→ Response: ${rawStr}`);
+        console.log(`[TagSync] Strategy 2 /tags: ${rawStr}`);
+
+        // Try to find the Leisr Billing tag
+        const tagsList = Array.isArray(tagsResult) ? tagsResult : tagsResult?.results || tagsResult?.tags || [];
+        const leisrTag = tagsList.find((t: any) =>
+          (typeof t === "string" && t === "Leisr Billing") ||
+          (t?.name === "Leisr Billing") ||
+          (t?.label === "Leisr Billing")
+        );
+
+        if (leisrTag) {
+          const tagId = typeof leisrTag === "object" ? leisrTag.id : null;
+          debugLog.push(`→ Found Leisr Billing tag (id: ${tagId})`);
+
+          if (tagId) {
+            // Try /tags/{id}/properties or /property?tag_id={id}
+            try {
+              const tagProps = await client.get<{ results?: any[] }>(`/tags/${tagId}/properties`, { limit: 500 });
+              const props = tagProps.results || [];
+              debugLog.push(`→ /tags/${tagId}/properties: ${props.length} results`);
+              if (props.length > 0) {
+                const taggedIds = new Set(props.map((p: any) => String(p.id)));
+                for (const prop of allProps) {
+                  if (taggedIds.has(prop.breezewayId)) {
+                    const existingTags: string[] = prop.tags ? JSON.parse(prop.tags as string) : [];
+                    if (!existingTags.includes("Leisr Billing")) existingTags.push("Leisr Billing");
+                    await db.update(breezewayProperties).set({ tags: JSON.stringify(existingTags) }).where(eq(breezewayProperties.breezewayId, prop.breezewayId));
+                    updated++;
+                  }
+                }
+                return { updated, errors, total: allProps.length, strategy: "tags/{id}/properties", debugLog: debugLog.join(' | ') };
+              }
+            } catch (err: any) {
+              debugLog.push(`→ /tags/${tagId}/properties failed: ${err.message?.substring(0, 60)}`);
+            }
+          }
+        }
+      } catch (err: any) {
+        debugLog.push(`→ Failed: ${err.message?.substring(0, 80)}`);
+        console.log(`[TagSync] Strategy 2 failed: ${err.message}`);
       }
 
-      // Fetch tags for each property
-      let sampleResponses: string[] = [];
-      for (const prop of allProps) {
-        try {
-          const tagResult = await client.get<any>(`/property/${prop.breezewayId}/tags`);
-          const tagData = Array.isArray(tagResult) ? tagResult
-            : tagResult?.results || tagResult?.tags || [];
+      // ── Strategy 3: Try /property_tag endpoint ──
+      try {
+        debugLog.push("Strategy 3: /property_tag");
+        const ptResult = await client.get<any>("/property_tag", { limit: 500 });
+        const rawStr = JSON.stringify(ptResult).substring(0, 300);
+        debugLog.push(`→ Response: ${rawStr}`);
+        console.log(`[TagSync] Strategy 3 /property_tag: ${rawStr}`);
+      } catch (err: any) {
+        debugLog.push(`→ Failed: ${err.message?.substring(0, 80)}`);
+      }
 
-          // Log a few samples to debug
-          if (sampleResponses.length < 5) {
-            sampleResponses.push(`${prop.name}: ${JSON.stringify(tagResult).substring(0, 150)}`);
-            console.log(`[TagSync] ${prop.name} raw response: ${JSON.stringify(tagResult).substring(0, 300)}`);
-          }
+      // ── Strategy 4: Per-property /property/{id}/tags — sample broadly ──
+      try {
+        debugLog.push("Strategy 4: per-property /tags (sampling 20)");
+        // Sample 20 properties spread across the list to see if any return tags
+        const sampleIndices = Array.from({ length: Math.min(20, allProps.length) }, (_, i) =>
+          Math.floor((i / 20) * allProps.length)
+        );
+        let foundAny = false;
 
-          if (Array.isArray(tagData) && tagData.length > 0) {
-            const tagNames = tagData.map((t: any) =>
-              typeof t === "string" ? t : t.name || t.label || String(t)
-            );
-            await db
-              .update(breezewayProperties)
-              .set({ tags: JSON.stringify(tagNames) })
-              .where(eq(breezewayProperties.breezewayId, prop.breezewayId));
-            updated++;
-          }
+        for (const idx of sampleIndices) {
+          const prop = allProps[idx];
+          try {
+            const tagResult = await client.get<any>(`/property/${prop.breezewayId}/tags`);
+            const tagData = Array.isArray(tagResult) ? tagResult
+              : tagResult?.results || tagResult?.tags || [];
 
-          await new Promise((r) => setTimeout(r, 100));
-        } catch (err: any) {
-          errors++;
-          if (errors <= 3) console.error(`[TagSync] Failed for ${prop.name}: ${err.message}`);
+            if (tagData.length > 0) {
+              foundAny = true;
+              debugLog.push(`→ ${prop.name} HAS tags: ${JSON.stringify(tagData).substring(0, 100)}`);
+              console.log(`[TagSync] Found tags on ${prop.name}: ${JSON.stringify(tagData)}`);
+            }
+            await new Promise((r) => setTimeout(r, 150));
+          } catch { /* skip */ }
         }
+
+        if (foundAny) {
+          // Full scan all properties
+          debugLog.push("→ Found tags! Running full scan...");
+          for (const prop of allProps) {
+            try {
+              const tagResult = await client.get<any>(`/property/${prop.breezewayId}/tags`);
+              const tagData = Array.isArray(tagResult) ? tagResult
+                : tagResult?.results || tagResult?.tags || [];
+              if (tagData.length > 0) {
+                const tagNames = tagData.map((t: any) =>
+                  typeof t === "string" ? t : t.name || t.label || String(t)
+                );
+                await db.update(breezewayProperties).set({ tags: JSON.stringify(tagNames) }).where(eq(breezewayProperties.breezewayId, prop.breezewayId));
+                updated++;
+              }
+              await new Promise((r) => setTimeout(r, 100));
+            } catch { errors++; }
+          }
+        } else {
+          debugLog.push("→ No tags found on any sampled properties");
+        }
+      } catch (err: any) {
+        debugLog.push(`→ Failed: ${err.message?.substring(0, 80)}`);
+      }
+
+      // ── Strategy 5: Check raw property response for tag-like fields ──
+      try {
+        debugLog.push("Strategy 5: raw property inspection");
+        const rawProp = await client.get<any>(`/property/${allProps[0]?.breezewayId}`);
+        const keys = Object.keys(rawProp || {});
+        debugLog.push(`→ Property keys: ${keys.join(', ')}`);
+
+        // Look for any tag-related fields
+        const tagKeys = keys.filter(k => k.toLowerCase().includes('tag') || k.toLowerCase().includes('label') || k.toLowerCase().includes('category'));
+        if (tagKeys.length > 0) {
+          debugLog.push(`→ Tag-related keys: ${tagKeys.map(k => `${k}=${JSON.stringify(rawProp[k]).substring(0, 50)}`).join(', ')}`);
+        }
+      } catch (err: any) {
+        debugLog.push(`→ Failed: ${err.message?.substring(0, 80)}`);
       }
 
       console.log(`[TagSync] Complete: ${updated} updated, ${errors} errors / ${allProps.length} total`);
-      return { updated, errors, total: allProps.length, sampleDebug: sampleResponses.join(' | ').substring(0, 500) };
+      console.log(`[TagSync] Debug: ${debugLog.join(' | ')}`);
+      return { updated, errors, total: allProps.length, strategy: "multi-probe", debugLog: debugLog.join(' | ') };
+    }),
+
+    // Manual bulk-tag properties (for restoring tags wiped by sync)
+    bulkTagProperties: adminProcedure
+      .input(z.object({
+        tag: z.string(),
+        propertyIds: z.array(z.number()).optional(), // DB IDs
+        propertyNames: z.array(z.string()).optional(), // fuzzy match by name
+        action: z.enum(["add", "remove", "set"]).default("add"),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+
+        const allProps = await getBreezewayProperties();
+        let updated = 0;
+        let matched: string[] = [];
+
+        // Determine target properties
+        let targets = allProps;
+        if (input.propertyIds && input.propertyIds.length > 0) {
+          targets = allProps.filter(p => input.propertyIds!.includes(p.id));
+        } else if (input.propertyNames && input.propertyNames.length > 0) {
+          const searchNames = input.propertyNames.map(n => n.toLowerCase().trim());
+          targets = allProps.filter(p => {
+            const pName = (p.name || "").toLowerCase();
+            return searchNames.some(s => pName.includes(s) || s.includes(pName));
+          });
+        }
+
+        for (const prop of targets) {
+          const existingTags: string[] = prop.tags ? JSON.parse(prop.tags as string) : [];
+          let newTags: string[];
+
+          if (input.action === "add") {
+            newTags = existingTags.includes(input.tag) ? existingTags : [...existingTags, input.tag];
+          } else if (input.action === "remove") {
+            newTags = existingTags.filter(t => t !== input.tag);
+          } else {
+            newTags = [input.tag];
+          }
+
+          if (JSON.stringify(newTags) !== JSON.stringify(existingTags)) {
+            await db.update(breezewayProperties).set({ tags: JSON.stringify(newTags) }).where(eq(breezewayProperties.breezewayId, prop.breezewayId));
+            updated++;
+            matched.push(prop.name || prop.breezewayId);
+          }
+        }
+
+        return { updated, totalTargets: targets.length, matched };
+      }),
+
+    // List all properties with their current tags (for tag management UI)
+    listPropertyTags: adminProcedure.query(async () => {
+      const allProps = await getBreezewayProperties();
+      return allProps.map(p => ({
+        id: p.id,
+        breezewayId: p.breezewayId,
+        name: p.name,
+        tags: p.tags ? JSON.parse(p.tags as string) : [],
+        status: p.status,
+      }));
     }),
 
     // Sync only Breezeway team

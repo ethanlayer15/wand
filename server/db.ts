@@ -1,4 +1,4 @@
-import { eq, desc, asc, sql, isNull, isNotNull, and, inArray } from "drizzle-orm";
+import { eq, desc, asc, sql, isNull, isNotNull, and, inArray, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2";
 import {
@@ -876,16 +876,28 @@ export async function getReviewAnalyses(opts?: { listingId?: number }) {
   return db.select().from(reviewAnalysis).orderBy(desc(reviewAnalysis.analyzedAt));
 }
 
+/**
+ * Cutoff for AI analysis. Reviews submitted BEFORE this date are never AI-analyzed
+ * (raw rating/cleanlinessRating data still flows through for all-time scores).
+ * Kept in sync with server/reviewPipeline.ts ANALYSIS_CUTOFF_DATE.
+ */
+const ANALYSIS_CUTOFF_DATE = new Date("2026-03-20T00:00:00Z");
+
 export async function getUnanalyzedReviewIds(limit = 100): Promise<number[]> {
   const db = await getDb();
   if (!db) return [];
-  // Use SQL LEFT JOIN to efficiently find reviews without analysis across ALL reviews
-  // This avoids the bug where we only looked at the top N*2 most recent reviews
+  // Use SQL LEFT JOIN to efficiently find reviews without analysis across ALL reviews.
+  // Only return reviews submitted on/after the cutoff — older reviews are intentionally skipped.
   const result = await db
     .select({ id: reviews.id })
     .from(reviews)
     .leftJoin(reviewAnalysis, eq(reviews.id, reviewAnalysis.reviewId))
-    .where(isNull(reviewAnalysis.reviewId))
+    .where(
+      and(
+        isNull(reviewAnalysis.reviewId),
+        gte(reviews.submittedAt, ANALYSIS_CUTOFF_DATE)
+      )
+    )
     .orderBy(asc(reviews.id))
     .limit(limit);
   return result.map((r) => r.id);
@@ -894,11 +906,18 @@ export async function getUnanalyzedReviewIds(limit = 100): Promise<number[]> {
 export async function countUnanalyzedReviews(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
+  // Only count reviews on/after the cutoff as "unanalyzed" — pre-cutoff reviews
+  // are intentionally excluded from AI analysis and should not count as backlog.
   const result = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(reviews)
     .leftJoin(reviewAnalysis, eq(reviews.id, reviewAnalysis.reviewId))
-    .where(isNull(reviewAnalysis.reviewId));
+    .where(
+      and(
+        isNull(reviewAnalysis.reviewId),
+        gte(reviews.submittedAt, ANALYSIS_CUTOFF_DATE)
+      )
+    );
   return Number(result[0]?.count ?? 0);
 }
 

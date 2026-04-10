@@ -13,7 +13,7 @@ import {
   upsertBreezewayProperty,
   getDb,
 } from "./db";
-import { listings } from "../drizzle/schema";
+import { listings, breezewayProperties } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
 // ── Hostaway Messages ───────────────────────────────────────────────
@@ -159,11 +159,21 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
 
     console.log(`[Sync] Total Breezeway properties fetched: ${allProperties.length}`);
 
+    // Pre-load existing tags so we don't wipe them during sync
+    const db = getDb();
+    const existingProps = db ? await db.select({ breezewayId: breezewayProperties.breezewayId, tags: breezewayProperties.tags }).from(breezewayProperties) : [];
+    const existingTagsMap = new Map(existingProps.map(p => [p.breezewayId, p.tags]));
+
     for (const prop of allProperties) {
       try {
         const defaultPhoto = prop.photos?.find((p: any) => p.default);
+        const bwId = String(prop.id);
+        // Preserve existing tags — never overwrite with empty
+        const existingTags = existingTagsMap.get(bwId);
+        const tagsToSet = existingTags || "[]";
+
         await upsertBreezewayProperty({
-          breezewayId: String(prop.id),
+          breezewayId: bwId,
           referencePropertyId: prop.reference_property_id ? String(prop.reference_property_id) : null,
           name: prop.name || prop.display || "Unnamed",
           address: prop.address1 ?? null,
@@ -171,7 +181,7 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
           state: prop.state ?? null,
           status: prop.status === "active" ? "active" : "inactive",
           photoUrl: defaultPhoto?.url ?? null,
-          tags: "[]",
+          tags: tagsToSet,
           syncedAt: new Date(),
         });
         synced++;
