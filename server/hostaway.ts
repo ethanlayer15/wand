@@ -34,21 +34,98 @@ export interface HostawayMessage {
 
 class HostawayClient {
   private client: AxiosInstance;
+  private accountId: string;
+  private clientSecret: string;
+  private accessToken: string | null = null;
+  private tokenExpiresAt: number = 0;
 
-  constructor(apiKey: string) {
+  constructor(accountId: string, clientSecret: string) {
+    this.accountId = accountId;
+    this.clientSecret = clientSecret;
     this.client = axios.create({
       baseURL: "https://api.hostaway.com/v1",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       timeout: 30000,
     });
   }
 
+  /**
+   * Exchange the account_id + client_secret for a short-lived access token via
+   * Hostaway's OAuth 2.0 client_credentials flow. Cached in memory until ~5 min
+   * before expiry.
+   *
+   * Hostaway's /accessTokens endpoint:
+   *   POST /accessTokens
+   *   content-type: application/x-www-form-urlencoded
+   *   body: grant_type=client_credentials&client_id=<accountId>&client_secret=<secret>&scope=general
+   */
+  private async getAccessToken(): Promise<string> {
+    const now = Date.now();
+    if (this.accessToken && now < this.tokenExpiresAt - 5 * 60 * 1000) {
+      return this.accessToken;
+    }
+    if (!this.accountId || !this.clientSecret) {
+      throw new Error(
+        "[Hostaway] Missing credentials — HOSTAWAY_ACCOUNT_ID and HOSTAWAY_API_KEY must be set"
+      );
+    }
+    try {
+      const body = new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: this.accountId,
+        client_secret: this.clientSecret,
+        scope: "general",
+      }).toString();
+      const resp = await axios.post(
+        "https://api.hostaway.com/v1/accessTokens",
+        body,
+        {
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cache-Control": "no-cache",
+          },
+          timeout: 30000,
+        }
+      );
+      const data = resp.data as {
+        access_token: string;
+        token_type?: string;
+        expires_in?: number;
+      };
+      this.accessToken = data.access_token;
+      // Hostaway tokens live ~24 months by default but respect the returned
+      // expires_in when present.
+      const expiresInMs = (data.expires_in ?? 60 * 60 * 24) * 1000;
+      this.tokenExpiresAt = now + expiresInMs;
+      console.log(
+        `[Hostaway] Obtained access token (expires in ${Math.round(expiresInMs / 1000 / 60)} min)`
+      );
+      return this.accessToken;
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const body = err?.response?.data;
+      const bodyStr =
+        typeof body === "string"
+          ? body.slice(0, 500)
+          : body
+            ? JSON.stringify(body).slice(0, 500)
+            : "(no body)";
+      console.error(
+        `[Hostaway] Token exchange failed: status=${status ?? "?"} body=${bodyStr}`
+      );
+      throw err;
+    }
+  }
+
   async get<T>(path: string, params?: Record<string, any>): Promise<T> {
     try {
-      const resp = await this.client.get(path, { params });
+      const token = await this.getAccessToken();
+      const resp = await this.client.get(path, {
+        params,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       return resp.data;
     } catch (err: any) {
       // Surface the actual Hostaway error body so we can diagnose 4xx/5xx
@@ -64,6 +141,12 @@ class HostawayClient {
       console.error(
         `[Hostaway] GET ${path} failed: status=${status ?? "?"} params=${JSON.stringify(params ?? {})} body=${bodyStr}`
       );
+      // On 401/403, force a token refresh on the next call in case our
+      // cached token was revoked server-side.
+      if (status === 401 || status === 403) {
+        this.accessToken = null;
+        this.tokenExpiresAt = 0;
+      }
       throw err;
     }
   }
@@ -206,7 +289,7 @@ let cachedClient: HostawayClient | null = null;
 
 export function getHostawayClient(): HostawayClient {
   if (!cachedClient) {
-    cachedClient = new HostawayClient(ENV.hostawayApiKey);
+    cachedClient = new HostawayClient(ENV.hostawayAccountId, ENV.hostawayApiKey);
   }
   return cachedClient;
 }

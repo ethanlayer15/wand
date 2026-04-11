@@ -18,7 +18,7 @@ import { pollBreezewayTasks } from "./breezewayTaskSync";
 import { syncCompletedCleans } from "./breezewayCleanSync";
 import { getBreezewaySyncConfig } from "./db";
 import { sendAllWeeklyPayReports, sendReceiptReminders } from "./emailReports";
-import { syncBreezewayTeam } from "./sync";
+import { syncBreezewayTeam, syncHostawayListings } from "./sync";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -295,6 +295,35 @@ export function startCronJobs(): void {
   }, ONE_DAY_MS);
   timers.push(teamSyncDaily);
   console.log("[Cron] Breezeway team sync scheduled (daily, if enabled)");
+
+  // 4d. Hostaway listings sync — once on startup and then every 6 hours.
+  // New vacation rentals get added weekly, so 6h is plenty of freshness
+  // without wasting API calls.
+  const listingsSyncStartup = setTimeout(async () => {
+    try {
+      console.log("[Cron] Running initial Hostaway listings sync...");
+      const result = await syncHostawayListings();
+      console.log(
+        `[Cron] Hostaway listings sync: ${result.synced} synced, ${result.errors} errors`
+      );
+    } catch (err: any) {
+      console.error("[Cron] Hostaway listings sync failed:", err.message);
+    }
+  }, 20_000); // 20s after startup (after team sync)
+  timers.push(listingsSyncStartup);
+
+  const listingsSyncInterval = setInterval(async () => {
+    try {
+      const result = await syncHostawayListings();
+      console.log(
+        `[Cron] Periodic Hostaway listings sync: ${result.synced} synced, ${result.errors} errors`
+      );
+    } catch (err: any) {
+      console.error("[Cron] Periodic Hostaway listings sync failed:", err.message);
+    }
+  }, 6 * ONE_HOUR_MS);
+  timers.push(listingsSyncInterval);
+  console.log("[Cron] Hostaway listings sync scheduled (every 6 hours)");
 
   // 6. Weekly pay reports — Friday 8 AM ET
   const fridayDelay = msUntilDayHourET(5, 8); // 5 = Friday, 8 = 8 AM ET
