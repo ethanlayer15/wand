@@ -52,8 +52,23 @@ class HostawayClient {
   }
 
   async getListings(): Promise<any[]> {
-    const resp = await this.get<{ result: any[] }>("/listings");
-    return resp.result || [];
+    // Hostaway's /listings endpoint paginates with limit+offset (default
+    // page size is 100). The previous implementation only pulled the first
+    // page, which is why we ended up with ~114 listings locally while
+    // Breezeway referenced 254 properties. Loop until we get a short page.
+    const all: any[] = [];
+    const limit = 100;
+    let offset = 0;
+    // Hard cap so a buggy API can't cause an infinite loop.
+    const maxPages = 50;
+    for (let page = 0; page < maxPages; page++) {
+      const resp = await this.get<{ result: any[] }>("/listings", { limit, offset });
+      const batch = resp.result || [];
+      all.push(...batch);
+      if (batch.length < limit) break;
+      offset += limit;
+    }
+    return all;
   }
 
   async getReservations(listingId?: number): Promise<any[]> {

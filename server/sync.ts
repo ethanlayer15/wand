@@ -86,6 +86,7 @@ export async function syncHostawayListings(): Promise<{ synced: number; errors: 
   try {
     const client = getHostawayClient();
     const hostawayListings = await client.getListings();
+    console.log(`[Sync] Hostaway returned ${hostawayListings.length} listings (paginated)`);
     const db = getDb();
 
     for (const hl of hostawayListings) {
