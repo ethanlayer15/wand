@@ -139,25 +139,100 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     const client = createBreezewayClient();
 
     // Build lookup maps
-    // 1. breezewayProperties → listings (via referencePropertyId → hostawayId)
+    // 1. breezewayProperties → listings. Try multiple strategies in order,
+    //    because Breezeway's reference_property_id is unreliable (it's only
+    //    populated for ~65% of props in prod, and some of those point at
+    //    stale/archived Hostaway IDs).
+    //
+    //    Tier A: referencePropertyId → listings.hostawayId (exact)
+    //    Tier B: breezeway.name (normalised) → listings.internalName (normalised)
+    //    Tier C: breezeway.name (normalised) → listings.name (normalised)
+    //    Tier D: breezeway.address (normalised) + city → listings.address + city
     const properties = await getBreezewayProperties();
     const allListings = await getListings();
+
+    const norm = (s: string | null | undefined): string =>
+      (s ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+
     const hostawayIdToListing = new Map<string, typeof allListings[0]>();
+    const internalNameToListing = new Map<string, typeof allListings[0]>();
+    const nameToListing = new Map<string, typeof allListings[0]>();
+    const addressCityToListing = new Map<string, typeof allListings[0]>();
     for (const l of allListings) {
       if (l.hostawayId) hostawayIdToListing.set(String(l.hostawayId), l);
-    }
-    const bwHomeIdToListing = new Map<number, typeof allListings[0]>();
-    for (const p of properties) {
-      if (p.referencePropertyId) {
-        const listing = hostawayIdToListing.get(String(p.referencePropertyId));
-        if (listing) {
-          bwHomeIdToListing.set(Number(p.breezewayId), listing);
-        }
+      const intKey = norm(l.internalName);
+      if (intKey && !internalNameToListing.has(intKey)) internalNameToListing.set(intKey, l);
+      const nameKey = norm(l.name);
+      if (nameKey && !nameToListing.has(nameKey)) nameToListing.set(nameKey, l);
+      const addrKey = `${norm(l.address)}|${norm(l.city)}`;
+      if (norm(l.address) && !addressCityToListing.has(addrKey)) {
+        addressCityToListing.set(addrKey, l);
       }
     }
+
+    const bwHomeIdToListing = new Map<number, typeof allListings[0]>();
+    let matchA = 0, matchB = 0, matchC = 0, matchD = 0, matchNone = 0;
+    const unmatchedSamples: string[] = [];
+    for (const p of properties) {
+      let listing: typeof allListings[0] | undefined;
+
+      // Tier A: referencePropertyId
+      if (p.referencePropertyId) {
+        listing = hostawayIdToListing.get(String(p.referencePropertyId));
+        if (listing) {
+          bwHomeIdToListing.set(Number(p.breezewayId), listing);
+          matchA++;
+          continue;
+        }
+      }
+
+      // Tier B: internalName
+      const bwNameKey = norm(p.name);
+      if (bwNameKey) {
+        listing = internalNameToListing.get(bwNameKey);
+        if (listing) {
+          bwHomeIdToListing.set(Number(p.breezewayId), listing);
+          matchB++;
+          continue;
+        }
+        // Tier C: name
+        listing = nameToListing.get(bwNameKey);
+        if (listing) {
+          bwHomeIdToListing.set(Number(p.breezewayId), listing);
+          matchC++;
+          continue;
+        }
+      }
+
+      // Tier D: address + city
+      const addrKey = `${norm(p.address)}|${norm(p.city)}`;
+      if (norm(p.address)) {
+        listing = addressCityToListing.get(addrKey);
+        if (listing) {
+          bwHomeIdToListing.set(Number(p.breezewayId), listing);
+          matchD++;
+          continue;
+        }
+      }
+
+      matchNone++;
+      if (unmatchedSamples.length < 5) {
+        unmatchedSamples.push(
+          `bwId=${p.breezewayId} refId=${p.referencePropertyId ?? "null"} name="${p.name}" addr="${p.address ?? ""}" city="${p.city ?? ""}"`
+        );
+      }
+    }
+
     console.log(
-      `[CleanSync] ${properties.length} total properties · ${properties.filter((p) => p.referencePropertyId).length} with referencePropertyId · ${properties.length - properties.filter((p) => p.referencePropertyId).length} home_id-only (fallback)`
+      `[CleanSync] Property match: ${properties.length} total · A-refId=${matchA} · B-internalName=${matchB} · C-name=${matchC} · D-address=${matchD} · unmatched=${matchNone}`
     );
+    if (unmatchedSamples.length > 0) {
+      console.log(`[CleanSync] Unmatched property samples:`);
+      for (const s of unmatchedSamples) console.log(`  ${s}`);
+    }
 
     // 2. Breezeway task assignments carry `assignee_id` which is the Breezeway
     //    user id (a number). In our DB that lives on breezewayTeam.breezewayId
