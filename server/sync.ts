@@ -241,9 +241,9 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
 
     const client = createBreezewayClient();
 
-    // Paginate through all Breezeway users — the /user/ endpoint caps at 200
-    // per page, and we were previously only reading page 1 (silently dropping
-    // users 201+). Loop until we get an empty page or hit total_pages.
+    // Breezeway's real team-listing endpoint is /team/ (NOT /user/ — that's a
+    // 404). We paginate defensively in case /team/ supports it; if it returns
+    // everything in one shot, the loop terminates after the first page.
     const PAGE_SIZE = 200;
     const MAX_PAGES = 50; // safety valve (10k users)
     let users: any[] = [];
@@ -251,7 +251,7 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
       const response = await client.get<{
         results?: any[];
         total_pages?: number;
-      }>("/user/", { limit: PAGE_SIZE, page });
+      }>("/team/", { limit: PAGE_SIZE, page });
       const batch = response.results || [];
       if (batch.length === 0) break;
       users = users.concat(batch);
@@ -268,6 +268,17 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
     for (const user of users) {
       try {
         const breezewayId = String(user.id);
+
+        // /team/ returns a combined `name` field. Fall back to splitting
+        // it into first/last if the API doesn't also provide them directly.
+        let firstName: string | null = user.first_name || user.firstName || null;
+        let lastName: string | null = user.last_name || user.lastName || null;
+        if (!firstName && !lastName && typeof user.name === "string") {
+          const parts = user.name.trim().split(/\s+/);
+          firstName = parts[0] ?? null;
+          lastName = parts.length > 1 ? parts.slice(1).join(" ") : null;
+        }
+
         // Upsert by breezewayId
         const existing = await db
           .select()
@@ -279,8 +290,8 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
           await db
             .update(breezewayTeam)
             .set({
-              firstName: user.first_name || user.firstName || null,
-              lastName: user.last_name || user.lastName || null,
+              firstName,
+              lastName,
               email: user.email || null,
               role: user.role || user.type || null,
               active: user.status === "active" || user.active !== false,
@@ -290,8 +301,8 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
         } else {
           await db.insert(breezewayTeam).values({
             breezewayId,
-            firstName: user.first_name || user.firstName || null,
-            lastName: user.last_name || user.lastName || null,
+            firstName,
+            lastName,
             email: user.email || null,
             role: user.role || user.type || null,
             active: user.status === "active" || user.active !== false,
