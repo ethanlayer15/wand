@@ -53,6 +53,10 @@ interface CleanSyncResult {
   skippedDupe?: number;
   /** How many tasks had no assignee matching any Wand cleaner */
   skippedNoCleaner?: number;
+  /** How many tasks were for a Breezeway property that doesn't map to any
+   *  current Hostaway listing — e.g. archived/dead properties or ex-customers.
+   *  We skip these so we don't pollute completedCleans with listingId=NULL rows. */
+  skippedNoListing?: number;
   /** How many properties we queried tasks for */
   propertiesQueried?: number;
   /** Timestamp the sync started */
@@ -118,6 +122,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     skippedOldDate: 0,
     skippedDupe: 0,
     skippedNoCleaner: 0,
+    skippedNoListing: 0,
     propertiesQueried: 0,
     startedAt: new Date().toISOString(),
   };
@@ -450,15 +455,23 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
           continue;
         }
 
-        // Resolve listing
+        // Resolve listing. If the Breezeway property doesn't map to any
+        // Hostaway listing we SKIP the task entirely — these are typically
+        // archived/dead properties or ex-customers we no longer work with,
+        // and inserting them with listingId=NULL creates unusable rows that
+        // can't earn pay (no cleaning fee / distance) and pollute the
+        // cleaning-reports pipeline.
         const listing = bwHomeIdToListing.get(task.home_id);
-        const propertyName = listing
-          ? (listing.internalName || listing.name || `Property ${task.home_id}`)
-          : task.name || `Breezeway Task ${task.id}`;
-        const cleaningFee = listing?.cleaningFeeCharge
+        if (!listing) {
+          result.skipped++;
+          result.skippedNoListing = (result.skippedNoListing ?? 0) + 1;
+          continue;
+        }
+        const propertyName = listing.internalName || listing.name || `Property ${task.home_id}`;
+        const cleaningFee = listing.cleaningFeeCharge
           ? String(listing.cleaningFeeCharge)
           : "0";
-        const distanceMiles = listing?.distanceFromStorage
+        const distanceMiles = listing.distanceFromStorage
           ? String(listing.distanceFromStorage)
           : "0";
         const scheduledDate = task.scheduled_date
@@ -479,7 +492,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         const [insertResult] = await db.insert(completedCleans).values({
           breezewayTaskId: taskIdStr,
           cleanerId: primaryCleanerId,
-          listingId: listing?.id ?? null,
+          listingId: listing.id,
           propertyName,
           scheduledDate,
           completedDate: task.completed_at ? new Date(task.completed_at) : scheduledDate,
@@ -500,7 +513,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
             await db.insert(completedCleans).values({
               breezewayTaskId: partnerTaskId,
               cleanerId: pairedCleanerId,
-              listingId: listing?.id ?? null,
+              listingId: listing.id,
               propertyName,
               scheduledDate,
               completedDate: task.completed_at ? new Date(task.completed_at) : scheduledDate,
@@ -521,7 +534,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     }
 
     console.log(
-      `[CleanSync] Complete: ${result.created} created, ${result.skipped} skipped (${result.skippedDupe} dupe, ${result.skippedNoCleaner} no-cleaner, ${result.skippedOldDate} old-date), ${result.errors} errors`
+      `[CleanSync] Complete: ${result.created} created, ${result.skipped} skipped (${result.skippedDupe} dupe, ${result.skippedNoCleaner} no-cleaner, ${result.skippedNoListing} no-listing, ${result.skippedOldDate} old-date), ${result.errors} errors`
     );
 
     // Send cleaning report emails for newly synced cleans

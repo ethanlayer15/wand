@@ -639,7 +639,7 @@ function CleanersManagementTab() {
         ? `  total fetched: ${lcs.total} · created: ${lcs.created} · skipped: ${lcs.skipped} · errors: ${lcs.errors}`
         : ``,
       lcs
-        ? `  skip breakdown: dupe=${lcs.skippedDupe ?? 0} · no-cleaner=${lcs.skippedNoCleaner ?? 0} · old-date=${lcs.skippedOldDate ?? 0}`
+        ? `  skip breakdown: dupe=${lcs.skippedDupe ?? 0} · no-cleaner=${lcs.skippedNoCleaner ?? 0} · no-listing=${(lcs as any).skippedNoListing ?? 0} · old-date=${lcs.skippedOldDate ?? 0}`
         : ``,
       ``,
       `Cleaners: ${data.cleaners.total} active · ${data.cleaners.withBreezewayTeamId} linked to breezewayTeam · ${data.cleaners.withNonNullScore} w/ score · ${data.cleaners.withScoreCalculated} calculated`,
