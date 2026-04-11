@@ -622,6 +622,7 @@ function CleanersManagementTab() {
     // Build a readable summary
     const bw = data.breezewaySync;
     const lcs = data.lastCleanSync;
+    const running = (data as any).cleanSyncInProgress;
     const lines = [
       `🩺 ${data.diagnosis}`,
       ``,
@@ -629,7 +630,9 @@ function CleanersManagementTab() {
       `  Properties: ${bw.totalProperties} total (${bw.propsWithReferenceId} w/ refId, ${bw.propsHomeIdOnly} home_id-only)`,
       `  breezewayTeam rows: ${bw.breezewayTeamRows} · cleansSync cutoff: ${bw.cleansSyncCutoff}`,
       ``,
-      lcs
+      running
+        ? `⏳ CleanSync is CURRENTLY RUNNING in the background — re-run diagnostic in 30-60s.`
+        : lcs
         ? `Last CleanSync run: ${lcs.finishedAt ?? "in-progress"} · queried ${lcs.propertiesQueried ?? "?"} props`
         : `Last CleanSync run: never since boot (click Sync Cleans or wait for cron)`,
       lcs
@@ -684,16 +687,20 @@ function CleanersManagementTab() {
   });
 
   const syncCleansMutation = trpc.compensation.syncCleans.useMutation({
-    onSuccess: (result) => {
-      const breakdown = [
-        `📦 CleanSync result`,
-        `Queried ${result.propertiesQueried ?? "?"} properties`,
-        `Fetched: ${result.total} · Created: ${result.created} · Skipped: ${result.skipped} · Errors: ${result.errors}`,
-        `Skip breakdown: dupe=${(result as any).skippedDupe ?? 0} · no-cleaner=${(result as any).skippedNoCleaner ?? 0} · old-date=${(result as any).skippedOldDate ?? 0}`,
-      ].join("\n");
-      console.log("[SyncCleans]", result);
+    onSuccess: (result: any) => {
+      console.log("[SyncCleans] started", result);
+      const lines = [
+        result.alreadyRunning
+          ? "⏳ Already running in the background"
+          : "🚀 Started in the background",
+        result.message ?? "",
+        "",
+        "Click Diagnose Scores in 30-60 seconds to see the result.",
+      ]
+        .filter(Boolean)
+        .join("\n");
       toast.message("Sync Cleans", {
-        description: breakdown,
+        description: lines,
         duration: 30000,
       });
     },

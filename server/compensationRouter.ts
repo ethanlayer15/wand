@@ -37,7 +37,12 @@ import {
 import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis, breezewayTeam } from "../drizzle/schema";
 import { eq, desc, gte, isNotNull } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
-import { syncCompletedCleans, getLastCleanSyncResult } from "./breezewayCleanSync";
+import {
+  syncCompletedCleans,
+  getLastCleanSyncResult,
+  isCleanSyncInProgress,
+  startCleanSyncInBackground,
+} from "./breezewayCleanSync";
 
 export const compensationRouter = router({
   // ── Cleaner-POD Assignments ──────────────────────────────────────
@@ -337,6 +342,10 @@ export const compensationRouter = router({
         // Most recent syncCompletedCleans() result, cached in memory on the
         // server process. Null until the first run since the latest boot.
         lastCleanSync: getLastCleanSyncResult(),
+        // True if a background CleanSync is currently running — we kick
+        // the sync off fire-and-forget because a full run takes longer
+        // than Railway's edge-proxy HTTP timeout.
+        cleanSyncInProgress: isCleanSyncInProgress(),
         cleaners: {
           total: activeCleaners.length,
           withScoreCalculated: activeCleaners.filter((c) => c.scoreLastCalculatedAt != null).length,
@@ -582,8 +591,29 @@ export const compensationRouter = router({
   /** Estimate compensation for a single clean */
   /**
    * Sync completed cleans from Breezeway (admin). Manual trigger.
+   *
+   * Fires the sync in the background and returns immediately. A full run
+   * takes longer (~70-120s for 250+ properties) than Railway's ~30s
+   * edge-proxy HTTP timeout, so we can't await it inline. The client
+   * polls `scoreDiagnostic.lastCleanSync` to see the final result.
    */
   syncCleans: adminProcedure.mutation(async () => {
+    const { started, alreadyRunning } = startCleanSyncInBackground();
+    return {
+      started,
+      alreadyRunning,
+      message: alreadyRunning
+        ? "A CleanSync is already in progress — check Diagnose Scores in 30-60 seconds."
+        : "CleanSync started in the background. Click Diagnose Scores in 30-60 seconds to see results.",
+    };
+  }),
+
+  /**
+   * Synchronous foreground sync — only for local dev / CLI use. In
+   * production this will hit Railway's edge-proxy timeout, so prefer
+   * `syncCleans` above.
+   */
+  syncCleansForeground: adminProcedure.mutation(async () => {
     const result = await syncCompletedCleans();
     return result;
   }),

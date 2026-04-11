@@ -65,8 +65,39 @@ interface CleanSyncResult {
 // scoreDiagnostic endpoint so we can see what happened without having
 // to rely on the toast in the UI (which disappears too fast).
 let lastCleanSyncResult: CleanSyncResult | null = null;
+// Track whether a background run is currently in progress so the UI
+// can show "running" instead of stale data.
+let cleanSyncInProgress = false;
 export function getLastCleanSyncResult(): CleanSyncResult | null {
   return lastCleanSyncResult;
+}
+export function isCleanSyncInProgress(): boolean {
+  return cleanSyncInProgress;
+}
+
+/**
+ * Fire-and-forget wrapper for syncCompletedCleans. Kicks off the sync in
+ * the background and returns immediately so the HTTP request doesn't hit
+ * Railway's ~30s edge-proxy timeout. The caller polls lastCleanSyncResult
+ * via the scoreDiagnostic endpoint to see when it finishes.
+ */
+export function startCleanSyncInBackground(): {
+  started: boolean;
+  alreadyRunning: boolean;
+} {
+  if (cleanSyncInProgress) {
+    return { started: false, alreadyRunning: true };
+  }
+  cleanSyncInProgress = true;
+  // Intentionally not awaited — runs off the event loop.
+  void syncCompletedCleans()
+    .catch((err) => {
+      console.error("[CleanSync] Background run crashed:", err?.message);
+    })
+    .finally(() => {
+      cleanSyncInProgress = false;
+    });
+  return { started: true, alreadyRunning: false };
 }
 
 /**
