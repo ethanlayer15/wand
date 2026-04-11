@@ -88,37 +88,69 @@ export async function syncHostawayListings(): Promise<{ synced: number; errors: 
     const hostawayListings = await client.getListings();
     console.log(`[Sync] Hostaway returned ${hostawayListings.length} listings (paginated)`);
     const db = getDb();
+    if (!db) throw new Error("Database not available");
 
     for (const hl of hostawayListings) {
       try {
+        // Hostaway listing field names vary slightly across API versions — be
+        // defensive and fall back through the most common spellings.
+        const hostawayId = String(hl.id);
+        const name = hl.name || hl.propertyName || hl.externalListingName || "Unnamed";
+        const internalName = hl.internalListingName || hl.internal_listing_name || null;
+        const address = hl.address || hl.address1 || null;
+        const city = hl.city || null;
+        const state = hl.state || hl.stateCode || null;
+        const country = hl.country || hl.countryCode || null;
+        const photoUrl = hl.thumbnailUrl || hl.thumbnail_url || hl.listingImages?.[0]?.url || null;
+        const guestCapacity =
+          typeof hl.personCapacity === "number"
+            ? hl.personCapacity
+            : typeof hl.guestCapacity === "number"
+              ? hl.guestCapacity
+              : null;
+
+        // NOTE: the listings table has NO syncedAt column — don't try to
+        // set one or the insert silently fails in the swallowed catch.
         await db
           .insert(listings)
           .values({
-            hostawayId: String(hl.id),
-            name: hl.name || "Unnamed",
-            address: hl.address || null,
-            city: hl.city || null,
-            state: hl.state || null,
-            photoUrl: hl.thumbnailUrl || null,
-            syncedAt: new Date(),
+            hostawayId,
+            name,
+            internalName,
+            address,
+            city,
+            state,
+            country,
+            guestCapacity,
+            photoUrl,
           })
           .onDuplicateKeyUpdate({
             set: {
-              name: hl.name || "Unnamed",
-              address: hl.address || null,
-              city: hl.city || null,
-              state: hl.state || null,
-              photoUrl: hl.thumbnailUrl || null,
-              syncedAt: new Date(),
+              name,
+              // Only overwrite internalName if Hostaway actually supplied one —
+              // otherwise we'd clobber any manually-set internal name.
+              ...(internalName ? { internalName } : {}),
+              address,
+              city,
+              state,
+              country,
+              guestCapacity,
+              photoUrl,
             },
           });
         synced++;
-      } catch {
+      } catch (e: any) {
         errors++;
+        if (errors <= 5) {
+          console.error(
+            `[Sync] Failed to upsert Hostaway listing ${hl?.id ?? "?"} (${hl?.name ?? "?"}): ${e?.message ?? e}`
+          );
+        }
       }
     }
-  } catch (err) {
-    console.error("[Sync] Hostaway listings sync failed:", err);
+    console.log(`[Sync] Hostaway listings sync result: ${synced} synced, ${errors} errors`);
+  } catch (err: any) {
+    console.error("[Sync] Hostaway listings sync failed:", err?.message ?? err);
     throw err;
   }
   return { synced, errors };
