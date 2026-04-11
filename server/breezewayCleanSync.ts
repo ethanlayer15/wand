@@ -159,20 +159,65 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
       `[CleanSync] ${properties.length} total properties · ${properties.filter((p) => p.referencePropertyId).length} with referencePropertyId · ${properties.length - properties.filter((p) => p.referencePropertyId).length} home_id-only (fallback)`
     );
 
-    // 2. breezewayTeam.breezewayId → cleaners (via cleaners.breezewayTeamId)
+    // 2. Breezeway task assignments carry `assignee_id` which is the Breezeway
+    //    user id (a number). In our DB that lives on breezewayTeam.breezewayId
+    //    (stored as varchar). cleaners.breezewayTeamId is an int FK to
+    //    breezewayTeam.id (the local PK).
+    //
+    //    We build two maps in two passes so that a type-coercion or a wrong-id
+    //    link on either side is impossible to silently drop:
+    //
+    //      A) teamRowIdToBwNumericId : breezewayTeam.id (local PK)  → numeric Breezeway user id
+    //      B) bwNumericIdToTeamRowId : numeric Breezeway user id    → breezewayTeam.id (local PK)
+    //
+    //    Then we walk every cleaner and look up its Breezeway user id via
+    //    whichever map matches, covering the case where `cleaners.breezewayTeamId`
+    //    was accidentally populated with the Breezeway numeric id instead of
+    //    the local PK.
     const allCleaners = await getCleaners();
     const teamMembers = await db.select().from(breezewayTeam);
-    // Map: breezeway assignee_id (which is breezewayTeam.breezewayId) → cleaner
-    const bwAssigneeToCleanerId = new Map<number, number>();
+
+    const teamRowIdToBwNumericId = new Map<number, number>();
+    const bwNumericIdToTeamRowId = new Map<number, number>();
     for (const tm of teamMembers) {
-      const cleaner = allCleaners.find((c) => c.breezewayTeamId === tm.id);
-      if (cleaner) {
-        bwAssigneeToCleanerId.set(Number(tm.breezewayId), cleaner.id);
+      const numericBwId = Number(tm.breezewayId);
+      if (Number.isFinite(numericBwId)) {
+        teamRowIdToBwNumericId.set(Number(tm.id), numericBwId);
+        bwNumericIdToTeamRowId.set(numericBwId, Number(tm.id));
       }
     }
 
+    // Map: breezeway assignee_id → cleaner.id
+    const bwAssigneeToCleanerId = new Map<number, number>();
+    let linkedViaPk = 0;
+    let linkedViaBwId = 0;
+    let unlinked = 0;
+    for (const c of allCleaners) {
+      if (c.breezewayTeamId == null) continue;
+      const raw = Number(c.breezewayTeamId);
+      if (!Number.isFinite(raw)) {
+        unlinked++;
+        continue;
+      }
+      // First try: treat stored value as a local breezewayTeam.id PK (the
+      // intended schema).
+      let bwNumericId = teamRowIdToBwNumericId.get(raw);
+      if (bwNumericId != null) {
+        linkedViaPk++;
+      } else if (bwNumericIdToTeamRowId.has(raw)) {
+        // Fallback: stored value is ALREADY the Breezeway numeric id (some
+        // rows may have been mislinked this way).
+        bwNumericId = raw;
+        linkedViaBwId++;
+      } else {
+        unlinked++;
+        continue;
+      }
+      bwAssigneeToCleanerId.set(bwNumericId, c.id);
+    }
+
     console.log(
-      `[CleanSync] Lookup maps: ${bwHomeIdToListing.size} properties, ${bwAssigneeToCleanerId.size} cleaners`
+      `[CleanSync] Lookup maps: ${bwHomeIdToListing.size} properties, ${bwAssigneeToCleanerId.size} cleaners (via-pk=${linkedViaPk} via-bwId=${linkedViaBwId} unlinked=${unlinked} / ${allCleaners.length} total cleaners, ${teamMembers.length} team rows)`
     );
 
     // 3. Get existing breezewayTaskIds to avoid duplicates
@@ -261,11 +306,14 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
           continue;
         }
 
-        // Find the assignee cleaner
+        // Find the assignee cleaner. Coerce to Number since Breezeway
+        // sometimes serialises ids as strings and Map lookups are strict.
         const assignees = task.assignments || [];
         const matchedCleanerIds: number[] = [];
         for (const a of assignees) {
-          const cleanerId = bwAssigneeToCleanerId.get(a.assignee_id);
+          const aid = Number(a.assignee_id);
+          if (!Number.isFinite(aid)) continue;
+          const cleanerId = bwAssigneeToCleanerId.get(aid);
           if (cleanerId) matchedCleanerIds.push(cleanerId);
         }
 
@@ -273,6 +321,12 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
           // No matched cleaner — skip (not one of our cleaners)
           result.skipped++;
           result.skippedNoCleaner = (result.skippedNoCleaner ?? 0) + 1;
+          // Log the first 3 unmatched assignees per sync so we can diagnose.
+          if ((result.skippedNoCleaner ?? 0) <= 3 && assignees.length > 0) {
+            console.log(
+              `[CleanSync] no-cleaner sample: task=${task.id} assignees=${JSON.stringify(assignees.map((a) => ({ id: a.assignee_id, name: a.name })))}`
+            );
+          }
           continue;
         }
 
