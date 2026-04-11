@@ -37,7 +37,7 @@ import {
 import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis, breezewayTeam } from "../drizzle/schema";
 import { eq, desc, gte, isNotNull } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
-import { syncCompletedCleans } from "./breezewayCleanSync";
+import { syncCompletedCleans, getLastCleanSyncResult } from "./breezewayCleanSync";
 
 export const compensationRouter = router({
   // ── Cleaner-POD Assignments ──────────────────────────────────────
@@ -323,6 +323,9 @@ export const compensationRouter = router({
         },
         breezewaySync: {
           enabled: bwConfig.enabled,
+          // NOTE: lastPollAt is updated by breezewayTaskSync, NOT cleanSync,
+          // so it tells you whether the task poller is alive but not whether
+          // cleans have been synced. See lastCleanSync below for that.
           lastPollAt: bwConfig.lastPollAt ? bwConfig.lastPollAt.toISOString() : null,
           syncActivatedAt: bwConfig.syncActivatedAt ? bwConfig.syncActivatedAt.toISOString() : null,
           totalProperties: bwProperties.length,
@@ -331,6 +334,9 @@ export const compensationRouter = router({
           breezewayTeamRows: bwTeamRows.length,
           cleansSyncCutoff: "2026-03-30T00:00:00.000Z",
         },
+        // Most recent syncCompletedCleans() result, cached in memory on the
+        // server process. Null until the first run since the latest boot.
+        lastCleanSync: getLastCleanSyncResult(),
         cleaners: {
           total: activeCleaners.length,
           withScoreCalculated: activeCleaners.filter((c) => c.scoreLastCalculatedAt != null).length,

@@ -621,12 +621,24 @@ function CleanersManagementTab() {
     if (!data) return;
     // Build a readable summary
     const bw = data.breezewaySync;
+    const lcs = data.lastCleanSync;
     const lines = [
       `🩺 ${data.diagnosis}`,
       ``,
-      `Breezeway sync: enabled=${bw.enabled} · lastPollAt=${bw.lastPollAt ?? "never"}`,
+      `Breezeway sync: enabled=${bw.enabled} · lastPollAt (task poller)=${bw.lastPollAt ?? "never"}`,
       `  Properties: ${bw.totalProperties} total (${bw.propsWithReferenceId} w/ refId, ${bw.propsHomeIdOnly} home_id-only)`,
       `  breezewayTeam rows: ${bw.breezewayTeamRows} · cleansSync cutoff: ${bw.cleansSyncCutoff}`,
+      ``,
+      lcs
+        ? `Last CleanSync run: ${lcs.finishedAt ?? "in-progress"} · queried ${lcs.propertiesQueried ?? "?"} props`
+        : `Last CleanSync run: never since boot (click Sync Cleans or wait for cron)`,
+      lcs
+        ? `  total fetched: ${lcs.total} · created: ${lcs.created} · skipped: ${lcs.skipped} · errors: ${lcs.errors}`
+        : ``,
+      lcs
+        ? `  skip breakdown: dupe=${lcs.skippedDupe ?? 0} · no-cleaner=${lcs.skippedNoCleaner ?? 0} · old-date=${lcs.skippedOldDate ?? 0}`
+        : ``,
+      ``,
       `Cleaners: ${data.cleaners.total} active · ${data.cleaners.withBreezewayTeamId} linked to breezewayTeam · ${data.cleaners.withNonNullScore} w/ score · ${data.cleaners.withScoreCalculated} calculated`,
       `Completed cleans (45d): ${data.completedCleans.last45Days} total · ${data.completedCleans.withCleanerId} w/ cleanerId · ${data.completedCleans.withListingId} w/ listingId · ${data.completedCleans.fullyMatched} fully matched`,
       `Latest clean: ${data.completedCleans.latestCleanDate ?? "none"}${data.completedCleans.daysSinceLatest != null ? ` (${data.completedCleans.daysSinceLatest}d ago)` : ""}`,
@@ -635,7 +647,7 @@ function CleanersManagementTab() {
       ``,
       `Top cleaners by clean count:`,
       ...data.perCleaner.slice(0, 8).map((c) => `  ${c.name}: ${c.cleansLast45Days} cleans · ${c.matchableReviewsLast30Days} matchable reviews · score=${c.currentScore ?? "null"}`),
-    ];
+    ].filter((l) => l !== "");
     const summary = lines.join("\n");
     // Log the full payload to console for deeper inspection
     console.log("[ScoreDiagnostic]", data);
@@ -673,11 +685,19 @@ function CleanersManagementTab() {
 
   const syncCleansMutation = trpc.compensation.syncCleans.useMutation({
     onSuccess: (result) => {
-      toast.success(
-        `Sync complete: ${result.created} new cleans imported, ${result.skipped} skipped, ${result.errors} errors`
-      );
+      const breakdown = [
+        `📦 CleanSync result`,
+        `Queried ${result.propertiesQueried ?? "?"} properties`,
+        `Fetched: ${result.total} · Created: ${result.created} · Skipped: ${result.skipped} · Errors: ${result.errors}`,
+        `Skip breakdown: dupe=${(result as any).skippedDupe ?? 0} · no-cleaner=${(result as any).skippedNoCleaner ?? 0} · old-date=${(result as any).skippedOldDate ?? 0}`,
+      ].join("\n");
+      console.log("[SyncCleans]", result);
+      toast.message("Sync Cleans", {
+        description: breakdown,
+        duration: 30000,
+      });
     },
-    onError: (err) => toast.error(`Sync failed: ${err.message}`),
+    onError: (err) => toast.error(`Sync failed: ${err.message}`, { duration: 30000 }),
   });
 
   const currentMonth = new Date().toISOString().slice(0, 7);

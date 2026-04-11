@@ -47,6 +47,26 @@ interface CleanSyncResult {
   skipped: number;
   errors: number;
   total: number;
+  /** How many tasks were skipped because their created_at was before the hard CUTOFF_DATE */
+  skippedOldDate?: number;
+  /** How many tasks already existed in the DB */
+  skippedDupe?: number;
+  /** How many tasks had no assignee matching any Wand cleaner */
+  skippedNoCleaner?: number;
+  /** How many properties we queried tasks for */
+  propertiesQueried?: number;
+  /** Timestamp the sync started */
+  startedAt?: string;
+  /** Timestamp the sync finished */
+  finishedAt?: string;
+}
+
+// Module-level cache of the most recent sync result — surfaced in the
+// scoreDiagnostic endpoint so we can see what happened without having
+// to rely on the toast in the UI (which disappears too fast).
+let lastCleanSyncResult: CleanSyncResult | null = null;
+export function getLastCleanSyncResult(): CleanSyncResult | null {
+  return lastCleanSyncResult;
 }
 
 /**
@@ -59,7 +79,17 @@ interface CleanSyncResult {
  * 4. Insert into completedCleans if not already present (dedup by breezewayTaskId)
  */
 export async function syncCompletedCleans(): Promise<CleanSyncResult> {
-  const result: CleanSyncResult = { created: 0, skipped: 0, errors: 0, total: 0 };
+  const result: CleanSyncResult = {
+    created: 0,
+    skipped: 0,
+    errors: 0,
+    total: 0,
+    skippedOldDate: 0,
+    skippedDupe: 0,
+    skippedNoCleaner: 0,
+    propertiesQueried: 0,
+    startedAt: new Date().toISOString(),
+  };
   const newCleanIds: number[] = []; // Track IDs for cleaning report emails
 
   const config = await getBreezewaySyncConfig();
@@ -125,7 +155,9 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     // for properties that don't have a referencePropertyId set. This mirrors the LeisrBilling
     // fix pattern — previously we dropped all properties without referencePropertyId.
     const queryableProperties = properties;
+    result.propertiesQueried = queryableProperties.length;
     let allTasks: BreezewayTaskResponse[] = [];
+    let rawFetched = 0;
 
     for (const property of queryableProperties) {
       try {
@@ -149,6 +181,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
           }>("/task/", params);
 
           const tasks = response.results || [];
+          rawFetched += tasks.length;
           // Filter to only completed/finished tasks
           const completedTasks = tasks.filter(
             (t) =>
@@ -172,7 +205,9 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
       }
     }
 
-    console.log(`[CleanSync] Fetched ${allTasks.length} completed housekeeping tasks`);
+    console.log(
+      `[CleanSync] Queried ${queryableProperties.length} properties · raw tasks: ${rawFetched} · finished/closed: ${allTasks.length}`
+    );
 
     // Hard cutoff: skip tasks created before March 30, 2026
     const CUTOFF_DATE = new Date("2026-03-30T00:00:00.000Z");
@@ -182,6 +217,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
       try {
         // Skip old tasks
         if (task.created_at && new Date(task.created_at) < CUTOFF_DATE) {
+          result.skippedOldDate = (result.skippedOldDate ?? 0) + 1;
           continue;
         }
 
@@ -190,6 +226,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         // Skip if already imported
         if (existingTaskIds.has(taskIdStr)) {
           result.skipped++;
+          result.skippedDupe = (result.skippedDupe ?? 0) + 1;
           continue;
         }
 
@@ -204,6 +241,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         if (matchedCleanerIds.length === 0) {
           // No matched cleaner — skip (not one of our cleaners)
           result.skipped++;
+          result.skippedNoCleaner = (result.skippedNoCleaner ?? 0) + 1;
           continue;
         }
 
@@ -278,7 +316,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     }
 
     console.log(
-      `[CleanSync] Complete: ${result.created} created, ${result.skipped} skipped, ${result.errors} errors`
+      `[CleanSync] Complete: ${result.created} created, ${result.skipped} skipped (${result.skippedDupe} dupe, ${result.skippedNoCleaner} no-cleaner, ${result.skippedOldDate} old-date), ${result.errors} errors`
     );
 
     // Send cleaning report emails for newly synced cleans
@@ -297,5 +335,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     result.errors++;
   }
 
+  result.finishedAt = new Date().toISOString();
+  lastCleanSyncResult = result;
   return result;
 }
