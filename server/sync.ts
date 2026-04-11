@@ -240,12 +240,28 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
     if (!db) return { synced: 0, errors: 0 };
 
     const client = createBreezewayClient();
-    const response = await client.get<{
-      results?: any[];
-    }>("/user/", { limit: 200, page: 1 });
 
-    const users = response.results || [];
-    console.log(`[Sync] Fetched ${users.length} Breezeway team members`);
+    // Paginate through all Breezeway users — the /user/ endpoint caps at 200
+    // per page, and we were previously only reading page 1 (silently dropping
+    // users 201+). Loop until we get an empty page or hit total_pages.
+    const PAGE_SIZE = 200;
+    const MAX_PAGES = 50; // safety valve (10k users)
+    let users: any[] = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const response = await client.get<{
+        results?: any[];
+        total_pages?: number;
+      }>("/user/", { limit: PAGE_SIZE, page });
+      const batch = response.results || [];
+      if (batch.length === 0) break;
+      users = users.concat(batch);
+      console.log(
+        `[Sync] Breezeway team page ${page}: +${batch.length} (total so far: ${users.length})`
+      );
+      if (batch.length < PAGE_SIZE) break;
+      if (response.total_pages && page >= response.total_pages) break;
+    }
+    console.log(`[Sync] Fetched ${users.length} Breezeway team members (paginated)`);
 
     const { breezewayTeam } = await import("../drizzle/schema");
 
