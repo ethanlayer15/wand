@@ -25,9 +25,17 @@ import {
   getCleanerScorecards,
   getAttributionStats,
 } from "./cleanerAttribution";
-import { getListings, getDb, getCleanerPodIds, setCleanerPods, getAllCleanerPodAssignments } from "./db";
-import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis } from "../drizzle/schema";
-import { eq, desc, gte } from "drizzle-orm";
+import {
+  getListings,
+  getDb,
+  getCleanerPodIds,
+  setCleanerPods,
+  getAllCleanerPodAssignments,
+  getBreezewaySyncConfig,
+  getBreezewayProperties,
+} from "./db";
+import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis, breezewayTeam } from "../drizzle/schema";
+import { eq, desc, gte, isNotNull } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
 import { syncCompletedCleans } from "./breezewayCleanSync";
 
@@ -162,8 +170,16 @@ export const compensationRouter = router({
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       const fortyFiveDaysAgo = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
 
+      // 0. Breezeway sync config + linkage health
+      const bwConfig = await getBreezewaySyncConfig();
+      const bwProperties = await getBreezewayProperties();
+      const bwTeamRows = await db.select().from(breezewayTeam);
+      const propsWithRefId = bwProperties.filter((p) => p.referencePropertyId).length;
+      const propsHomeIdOnly = bwProperties.length - propsWithRefId;
+
       // 1. Active cleaners
       const activeCleaners = await db.select().from(cleaners).where(eq(cleaners.active, true));
+      const cleanersWithBwTeam = activeCleaners.filter((c) => c.breezewayTeamId != null).length;
 
       // 2. Completed cleans in last 45 days
       const recentCleans = await db
@@ -267,10 +283,19 @@ export const compensationRouter = router({
 
       // Top-level verdict: the most likely root cause
       let diagnosis = "";
-      if (activeCleaners.length === 0) {
+      if (!bwConfig.enabled) {
+        diagnosis =
+          "Breezeway sync is DISABLED in integrations.breezeway.config.taskSyncEnabled — sync will short-circuit and never insert cleans. Enable it on the Breezeway integration page.";
+      } else if (cleanersWithBwTeam === 0) {
+        diagnosis =
+          "Sync is enabled but NONE of the active cleaners have a breezewayTeamId — every fetched task will fail the assignee mapping. Run Sync Breezeway Team or link cleaners manually.";
+      } else if (activeCleaners.length === 0) {
         diagnosis = "No active cleaners in the cleaners table.";
       } else if (recentCleans.length === 0) {
-        diagnosis = "No completedCleans in the last 45 days — breezewayCleanSync may not be running.";
+        diagnosis =
+          bwConfig.lastPollAt
+            ? `No completedCleans in the last 45 days — sync IS enabled and last polled ${bwConfig.lastPollAt.toISOString()}, but no rows were inserted. Click 'Sync Cleans' and check the toast for total/created/skipped counts.`
+            : "No completedCleans in the last 45 days — sync is enabled but lastPollAt is null (cron has never run since enable). Click 'Sync Cleans' to trigger manually.";
       } else if (cleansWithCleanerId.length === 0) {
         diagnosis =
           "completedCleans exist but NONE have cleanerId set — the Breezeway assignee → cleaner mapping is broken.";
@@ -296,10 +321,21 @@ export const compensationRouter = router({
           reviewWindowStart: thirtyDaysAgo.toISOString(),
           cleanWindowStart: fortyFiveDaysAgo.toISOString(),
         },
+        breezewaySync: {
+          enabled: bwConfig.enabled,
+          lastPollAt: bwConfig.lastPollAt ? bwConfig.lastPollAt.toISOString() : null,
+          syncActivatedAt: bwConfig.syncActivatedAt ? bwConfig.syncActivatedAt.toISOString() : null,
+          totalProperties: bwProperties.length,
+          propsWithReferenceId: propsWithRefId,
+          propsHomeIdOnly,
+          breezewayTeamRows: bwTeamRows.length,
+          cleansSyncCutoff: "2026-03-30T00:00:00.000Z",
+        },
         cleaners: {
           total: activeCleaners.length,
           withScoreCalculated: activeCleaners.filter((c) => c.scoreLastCalculatedAt != null).length,
           withNonNullScore: activeCleaners.filter((c) => c.currentRollingScore != null).length,
+          withBreezewayTeamId: cleanersWithBwTeam,
         },
         completedCleans: {
           last45Days: recentCleans.length,

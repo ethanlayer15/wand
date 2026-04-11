@@ -620,10 +620,14 @@ function CleanersManagementTab() {
     }
     if (!data) return;
     // Build a readable summary
+    const bw = data.breezewaySync;
     const lines = [
       `🩺 ${data.diagnosis}`,
       ``,
-      `Cleaners: ${data.cleaners.total} active · ${data.cleaners.withNonNullScore} with score · ${data.cleaners.withScoreCalculated} calculated`,
+      `Breezeway sync: enabled=${bw.enabled} · lastPollAt=${bw.lastPollAt ?? "never"}`,
+      `  Properties: ${bw.totalProperties} total (${bw.propsWithReferenceId} w/ refId, ${bw.propsHomeIdOnly} home_id-only)`,
+      `  breezewayTeam rows: ${bw.breezewayTeamRows} · cleansSync cutoff: ${bw.cleansSyncCutoff}`,
+      `Cleaners: ${data.cleaners.total} active · ${data.cleaners.withBreezewayTeamId} linked to breezewayTeam · ${data.cleaners.withNonNullScore} w/ score · ${data.cleaners.withScoreCalculated} calculated`,
       `Completed cleans (45d): ${data.completedCleans.last45Days} total · ${data.completedCleans.withCleanerId} w/ cleanerId · ${data.completedCleans.withListingId} w/ listingId · ${data.completedCleans.fullyMatched} fully matched`,
       `Latest clean: ${data.completedCleans.latestCleanDate ?? "none"}${data.completedCleans.daysSinceLatest != null ? ` (${data.completedCleans.daysSinceLatest}d ago)` : ""}`,
       `Reviews (30d): ${data.reviews.last30Days} total · Airbnb w/ cleanliness sub-score: ${data.reviews.airbnbWithCleanlinessSubScore} · AI-analyzed: ${data.reviews.analyzedByAI}`,
