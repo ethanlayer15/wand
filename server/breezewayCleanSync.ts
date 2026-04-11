@@ -173,13 +173,24 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
       }
     }
 
+    // Breezeway's `name` column often uses the format
+    //   "<short internal> · <full marketing name>"
+    // so we split on " · " and remember just the first segment as the
+    // "short" alias that's likely to match listings.internalName.
+    const splitShortName = (raw: string | null | undefined): string => {
+      if (!raw) return "";
+      const parts = raw.split("·").map((s) => s.trim()).filter(Boolean);
+      return parts[0] ?? raw;
+    };
+
     const bwHomeIdToListing = new Map<number, typeof allListings[0]>();
-    let matchA = 0, matchB = 0, matchC = 0, matchD = 0, matchNone = 0;
+    let matchA = 0, matchB = 0, matchC = 0, matchD = 0, matchE = 0, matchNone = 0;
+    let unmatchedWithRefId = 0;
     const unmatchedSamples: string[] = [];
     for (const p of properties) {
       let listing: typeof allListings[0] | undefined;
 
-      // Tier A: referencePropertyId
+      // Tier A: referencePropertyId → hostawayId
       if (p.referencePropertyId) {
         listing = hostawayIdToListing.get(String(p.referencePropertyId));
         if (listing) {
@@ -189,22 +200,36 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         }
       }
 
-      // Tier B: internalName
-      const bwNameKey = norm(p.name);
-      if (bwNameKey) {
-        listing = internalNameToListing.get(bwNameKey);
-        if (listing) {
-          bwHomeIdToListing.set(Number(p.breezewayId), listing);
-          matchB++;
-          continue;
+      // Tier B: internalName — compare using both the full Breezeway name
+      // AND just the short alias before " · "
+      const bwFullKey = norm(p.name);
+      const bwShortKey = norm(splitShortName(p.name));
+      const bKeys = new Set([bwFullKey, bwShortKey].filter(Boolean));
+      for (const k of bKeys) {
+        const match = internalNameToListing.get(k);
+        if (match) {
+          listing = match;
+          break;
         }
-        // Tier C: name
-        listing = nameToListing.get(bwNameKey);
-        if (listing) {
-          bwHomeIdToListing.set(Number(p.breezewayId), listing);
-          matchC++;
-          continue;
+      }
+      if (listing) {
+        bwHomeIdToListing.set(Number(p.breezewayId), listing);
+        matchB++;
+        continue;
+      }
+
+      // Tier C: listings.name using same two keys
+      for (const k of bKeys) {
+        const match = nameToListing.get(k);
+        if (match) {
+          listing = match;
+          break;
         }
+      }
+      if (listing) {
+        bwHomeIdToListing.set(Number(p.breezewayId), listing);
+        matchC++;
+        continue;
       }
 
       // Tier D: address + city
@@ -218,7 +243,27 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         }
       }
 
+      // Tier E: substring — listing.internalName contained in Breezeway name,
+      // or Breezeway short alias contained in listing.internalName. Only
+      // accept if the alias is ≥4 chars to avoid "The"/"At" collisions.
+      if (bwShortKey.length >= 4) {
+        for (const l of allListings) {
+          const li = norm(l.internalName);
+          if (!li || li.length < 4) continue;
+          if (li === bwShortKey || bwFullKey.includes(li) || bwShortKey.includes(li) || li.includes(bwShortKey)) {
+            listing = l;
+            break;
+          }
+        }
+      }
+      if (listing) {
+        bwHomeIdToListing.set(Number(p.breezewayId), listing);
+        matchE++;
+        continue;
+      }
+
       matchNone++;
+      if (p.referencePropertyId) unmatchedWithRefId++;
       if (unmatchedSamples.length < 5) {
         unmatchedSamples.push(
           `bwId=${p.breezewayId} refId=${p.referencePropertyId ?? "null"} name="${p.name}" addr="${p.address ?? ""}" city="${p.city ?? ""}"`
@@ -227,7 +272,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     }
 
     console.log(
-      `[CleanSync] Property match: ${properties.length} total · A-refId=${matchA} · B-internalName=${matchB} · C-name=${matchC} · D-address=${matchD} · unmatched=${matchNone}`
+      `[CleanSync] Property match: ${properties.length} bw props vs ${allListings.length} listings · A-refId=${matchA} · B-internalName=${matchB} · C-name=${matchC} · D-address=${matchD} · E-substring=${matchE} · unmatched=${matchNone} (${unmatchedWithRefId} of those had a refId but no listing in DB)`
     );
     if (unmatchedSamples.length > 0) {
       console.log(`[CleanSync] Unmatched property samples:`);
