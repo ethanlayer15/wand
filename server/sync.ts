@@ -87,7 +87,7 @@ export async function syncHostawayListings(): Promise<{ synced: number; errors: 
     const client = getHostawayClient();
     const hostawayListings = await client.getListings();
     console.log(`[Sync] Hostaway returned ${hostawayListings.length} listings (paginated)`);
-    const db = getDb();
+    const db = await getDb();
     if (!db) throw new Error("Database not available");
 
     for (const hl of hostawayListings) {
@@ -193,7 +193,7 @@ export async function syncBreezewayProperties(): Promise<{ synced: number; error
     console.log(`[Sync] Total Breezeway properties fetched: ${allProperties.length}`);
 
     // Pre-load existing tags so we don't wipe them during sync
-    const db = getDb();
+    const db = await getDb();
     const existingProps = db ? await db.select({ breezewayId: breezewayProperties.breezewayId, tags: breezewayProperties.tags }).from(breezewayProperties) : [];
     const existingTagsMap = new Map(existingProps.map(p => [p.breezewayId, p.tags]));
 
