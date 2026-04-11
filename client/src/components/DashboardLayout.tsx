@@ -214,7 +214,7 @@ function DashboardLayoutContent({
   const { user } = useAuth();
   const permissions = usePermissions();
   const [location, setLocation] = useLocation();
-  const { state, toggleSidebar } = useSidebar();
+  const { state, toggleSidebar, setOpenMobile } = useSidebar();
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -246,6 +246,7 @@ function DashboardLayoutContent({
   }, [isCollapsed]);
 
   useEffect(() => {
+    if (isMobile) return; // no resize on touch
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
       const sidebarLeft =
@@ -268,7 +269,7 @@ function DashboardLayoutContent({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isResizing, setSidebarWidth]);
+  }, [isMobile, isResizing, setSidebarWidth]);
 
   const initials = user?.name
     ? user.name
@@ -332,8 +333,9 @@ function DashboardLayoutContent({
                             tooltip={item.label}
                             className="h-9 w-full font-normal text-sidebar-foreground/80 hover:text-sidebar-foreground hover:bg-sidebar-accent data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-foreground"
                             onClick={() => {
-                              if (isCollapsed) {
+                              if (isCollapsed || isMobile) {
                                 setLocation(item.path);
+                                if (isMobile) setOpenMobile(false);
                               }
                             }}
                           >
@@ -355,7 +357,10 @@ function DashboardLayoutContent({
                                 <SidebarMenuSubItem key={child.path}>
                                   <SidebarMenuSubButton
                                     isActive={childActive}
-                                    onClick={() => setLocation(child.path)}
+                                    onClick={() => {
+                                      setLocation(child.path);
+                                      if (isMobile) setOpenMobile(false);
+                                    }}
                                     className="text-sidebar-foreground/70 hover:text-sidebar-foreground data-[active=true]:text-sidebar-foreground data-[active=true]:bg-sidebar-accent/60"
                                   >
                                     {child.label}
@@ -374,7 +379,10 @@ function DashboardLayoutContent({
                   <SidebarMenuItem key={item.path}>
                     <SidebarMenuButton
                       isActive={active}
-                      onClick={() => setLocation(item.path)}
+                      onClick={() => {
+                        setLocation(item.path);
+                        if (isMobile) setOpenMobile(false);
+                      }}
                       tooltip={item.label}
                       className="h-9 font-normal text-sidebar-foreground/80 hover:text-sidebar-foreground hover:bg-sidebar-accent data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-foreground"
                     >
@@ -394,7 +402,10 @@ function DashboardLayoutContent({
                 <SidebarMenuItem key={item.path}>
                   <SidebarMenuButton
                     isActive={location === item.path}
-                    onClick={() => setLocation(item.path)}
+                    onClick={() => {
+                      setLocation(item.path);
+                      if (isMobile) setOpenMobile(false);
+                    }}
                     tooltip={item.label}
                     className="h-9 font-normal text-sidebar-foreground/80 hover:text-sidebar-foreground hover:bg-sidebar-accent data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-foreground"
                   >

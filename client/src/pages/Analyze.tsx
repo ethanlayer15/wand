@@ -342,7 +342,7 @@ export default function Analyze() {
   const states = overviewData?.states;
 
   return (
-    <div className="space-y-6 p-6 w-full min-w-0">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-6 w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">

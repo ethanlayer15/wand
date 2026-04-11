@@ -74,7 +74,7 @@ const BEDROOM_TIER_LABELS: Record<number, string> = {
 
 export default function Compensation() {
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 sm:p-6 max-w-7xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold">Compensation</h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -296,7 +296,7 @@ function PropertiesTab() {
 
       {/* Actions bar */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative flex-1 min-w-[160px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search properties..."
@@ -1371,6 +1371,7 @@ function PayCalculatorTab() {
       {tiers && (
         <Card className="p-5">
           <h3 className="font-semibold mb-3">Bedroom Tier Reference</h3>
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1395,6 +1396,7 @@ function PayCalculatorTab() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </Card>
       )}
 
@@ -1999,7 +2001,7 @@ function CleansHistoryTab() {
           No cleans found for the selected filters.
         </p>
       ) : (
-        <div className="rounded-md border overflow-hidden">
+        <div className="rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>

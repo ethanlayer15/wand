@@ -2,7 +2,7 @@ import { trpc } from "@/lib/trpc";
 import { PropertyCombobox } from "@/components/PropertyCombobox";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -90,6 +90,7 @@ import {
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useIsMobile } from "@/hooks/useMobile";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -174,6 +175,14 @@ const STATUS_BG: Record<string, string> = {
   completed: "bg-emerald-50 dark:bg-emerald-950/30",
   ignored: "bg-gray-50 dark:bg-gray-950/30",
   ideas_for_later: "bg-violet-50 dark:bg-violet-950/30",
+};
+
+// Short labels for mobile column tabs
+const MOBILE_COLUMN_LABELS: Record<string, string> = {
+  created: "Queue",
+  needs_review: "Review",
+  up_next: "Up Next",
+  in_progress: "Active",
 };
 
 // Archive tab definitions
@@ -692,11 +701,14 @@ function TaskDetailSheet({
   task,
   open,
   onOpenChange,
+  onStatusChange,
 }: {
   task: TaskType | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onStatusChange?: (taskId: number, status: string) => void;
 }) {
+  const isMobile = useIsMobile();
   const utils = trpc.useUtils();
   const { data: detail, isLoading } = trpc.tasks.detail.useQuery(
     { taskId: task?.id ?? 0 },
@@ -757,32 +769,82 @@ function TaskDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-lg p-0">
-        <SheetHeader className="px-6 pt-6 pb-2">
+      <SheetContent
+        side={isMobile ? "bottom" : "right"}
+        className={isMobile
+          ? "h-[92dvh] rounded-t-2xl p-0 flex flex-col"
+          : "w-full sm:max-w-lg p-0"
+        }
+      >
+        <SheetHeader className="px-4 sm:px-6 pt-4 sm:pt-6 pb-2">
           <div className="flex items-center justify-between">
             <SheetTitle className="text-base">Task Detail</SheetTitle>
-            {task && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  const url = `${window.location.origin}/task/${task.id}`;
-                  navigator.clipboard.writeText(url);
-                  toast.success("Task link copied to clipboard");
-                }}
-              >
-                <Link className="h-3.5 w-3.5" />
-                Copy Link
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {/* Inline status changer — useful on mobile where drag is unavailable */}
+              {task && onStatusChange && (
+                <Select
+                  value={task.status}
+                  onValueChange={(v) => onStatusChange(task.id, v)}
+                >
+                  <SelectTrigger className="h-7 text-xs w-[130px] border-dashed">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${STATUS_DOTS[task.status] || "bg-gray-400"}`} />
+                      <SelectValue />
+                    </div>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BOARD_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2 w-2 rounded-full ${STATUS_DOTS[s]}`} />
+                          {STATUS_LABELS[s]}
+                        </div>
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="completed">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        Done
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="ignored">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-gray-300" />
+                        Ignored
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="ideas_for_later">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-violet-500" />
+                        Ideas for Later
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+              {task && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    const url = `${window.location.origin}/task/${task.id}`;
+                    navigator.clipboard.writeText(url);
+                    toast.success("Task link copied to clipboard");
+                  }}
+                >
+                  <Link className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Copy Link</span>
+                </Button>
+              )}
+            </div>
           </div>
           <SheetDescription className="sr-only">
             Full task details with conversation history
           </SheetDescription>
         </SheetHeader>
 
-        <ScrollArea className="h-[calc(100vh-80px)] px-6 pb-6">
+        <ScrollArea className="flex-1 h-0 px-4 sm:px-6 pb-6">
           {isLoading ? (
             <div className="space-y-4 pt-4">
               <Skeleton className="h-6 w-3/4" />
@@ -1909,7 +1971,7 @@ function NewTaskDialog({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Priority */}
             <div className="space-y-1.5">
               <Label>Priority</Label>
@@ -2103,10 +2165,12 @@ export default function Tasks() {
   const utils = trpc.useUtils();
   const permissions = usePermissions();
   const { user } = useAuth();
+  const isMobile = useIsMobile();
   const { data: tasks, isLoading, refetch } = trpc.tasks.list.useQuery();
   const { data: teamMembers = [] } = trpc.tasks.teamMembers.useQuery();
   const { data: listingsData = [] } = trpc.listings.list.useQuery();
   const [viewMode, setViewMode] = useState<"board" | "list">("board");
+  const [mobileBoardTab, setMobileBoardTab] = useState<string>(BOARD_STATUSES[0]);
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [pushingTaskId, setPushingTaskId] = useState<number | null>(null);
   const [pipelineRunning, setPipelineRunning] = useState(false);
@@ -2571,7 +2635,7 @@ export default function Tasks() {
   // ── Render ─────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6 p-6 w-full min-w-0">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-6 w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -2905,8 +2969,8 @@ export default function Tasks() {
             onToggleUrgent={handleToggleUrgent}
           />
 
-          {/* Four-column board */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pb-4">
+          {/* Four-column board — desktop grid */}
+          <div className="hidden sm:grid sm:grid-cols-2 lg:grid-cols-4 gap-3 pb-4">
             {tasksByStatus.map(({ status, tasks: colTasks }) => (
               <DroppableColumn
                 key={status}
@@ -2922,6 +2986,43 @@ export default function Tasks() {
                 onToggleUrgent={handleToggleUrgent}
               />
             ))}
+          </div>
+
+          {/* Mobile board — one column at a time via tabs */}
+          <div className="sm:hidden pb-4">
+            <Tabs value={mobileBoardTab} onValueChange={setMobileBoardTab}>
+              <TabsList className="grid w-full grid-cols-4 mb-3">
+                {BOARD_STATUSES.map((status) => {
+                  const count = tasksByStatus.find((c) => c.status === status)?.tasks.length ?? 0;
+                  return (
+                    <TabsTrigger key={status} value={status} className="text-[11px] px-1 flex flex-col gap-0.5 h-auto py-1.5">
+                      <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOTS[status]}`} />
+                      <span className="leading-tight">{MOBILE_COLUMN_LABELS[status]}</span>
+                      <span className="text-[10px] text-muted-foreground">{count}</span>
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+              {BOARD_STATUSES.map((status) => {
+                const colTasks = tasksByStatus.find((c) => c.status === status)?.tasks ?? [];
+                return (
+                  <TabsContent key={status} value={status} className="mt-0">
+                    <DroppableColumn
+                      status={status}
+                      columnTasks={colTasks}
+                      teamMembers={teamMembers}
+                      onPushToBreezeway={handlePushToBreezeway}
+                      pushingTaskId={pushingTaskId}
+                      onAssigneeChange={handleAssigneeChange}
+                      isLoading={isLoading}
+                      onCardClick={handleCardClick}
+                      allTasks={filteredTasks}
+                      onToggleUrgent={handleToggleUrgent}
+                    />
+                  </TabsContent>
+                );
+              })}
+            </Tabs>
           </div>
 
           {/* Dynamic bottom drop zones — FIXED to viewport bottom during drag */}
@@ -3013,6 +3114,12 @@ export default function Tasks() {
         task={detailTask}
         open={detailOpen}
         onOpenChange={setDetailOpen}
+        onStatusChange={(taskId, status) => {
+          updateStatus.mutate({ taskId, status: status as any });
+          // Optimistically update detailTask so the dropdown reflects the new status
+          setDetailTask((prev) => prev ? { ...prev, status: status as any } : prev);
+          toast.success(`Task moved to ${STATUS_LABELS[status] || status}`);
+        }}
       />
 
       {/* New Task Dialog */}

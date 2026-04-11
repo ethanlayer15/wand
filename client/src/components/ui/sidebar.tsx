@@ -4,7 +4,9 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { PanelLeft } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useMobile";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import {
   Tooltip,
   TooltipContent,
@@ -74,9 +76,15 @@ const SidebarProvider = React.forwardRef<
       [setOpenProp, open]
     );
 
+    const isMobile = useIsMobile();
+
     const toggleSidebar = React.useCallback(() => {
-      return setOpen((open) => !open);
-    }, [setOpen]);
+      if (isMobile) {
+        setOpenMobile((prev) => !prev);
+      } else {
+        setOpen((open) => !open);
+      }
+    }, [isMobile, setOpen, setOpenMobile]);
 
     React.useEffect(() => {
       const handleKeyDown = (event: KeyboardEvent) => {
@@ -93,7 +101,6 @@ const SidebarProvider = React.forwardRef<
     }, [toggleSidebar]);
 
     const state = open ? "expanded" : "collapsed";
-    const isMobile = false;
 
     const contextValue = React.useMemo<SidebarContext>(
       () => ({
@@ -154,7 +161,25 @@ const Sidebar = React.forwardRef<
     },
     ref
   ) => {
-    const { state } = useSidebar();
+    const { state, isMobile, openMobile, setOpenMobile } = useSidebar();
+
+    if (isMobile) {
+      return (
+        <Sheet open={openMobile} onOpenChange={setOpenMobile}>
+          <SheetContent
+            side="left"
+            className={cn(
+              "w-[var(--sidebar-width)] bg-sidebar text-sidebar-foreground border-r-0 p-0 [&>button:last-child]:hidden",
+              className
+            )}
+          >
+            <div data-sidebar="sidebar" className="flex h-full w-full flex-col">
+              {children}
+            </div>
+          </SheetContent>
+        </Sheet>
+      );
+    }
 
     if (collapsible === "none") {
       return (
