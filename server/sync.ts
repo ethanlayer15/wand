@@ -241,43 +241,89 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
 
     const client = createBreezewayClient();
 
-    // Breezeway's real team-listing endpoint is /team/ (NOT /user/ — that's a
-    // 404). We paginate defensively in case /team/ supports it; if it returns
-    // everything in one shot, the loop terminates after the first page.
-    const PAGE_SIZE = 200;
-    const MAX_PAGES = 50; // safety valve (10k users)
-    let users: any[] = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const response = await client.get<{
-        results?: any[];
-        total_pages?: number;
-      }>("/team/", { limit: PAGE_SIZE, page });
-      const batch = response.results || [];
-      if (batch.length === 0) break;
-      users = users.concat(batch);
-      console.log(
-        `[Sync] Breezeway team page ${page}: +${batch.length} (total so far: ${users.length})`
-      );
-      if (batch.length < PAGE_SIZE) break;
-      if (response.total_pages && page >= response.total_pages) break;
+    // Breezeway's public inventory API does NOT expose a user/team listing
+    // endpoint (/user/ and /team/ both return 404). The only way to discover
+    // team members is through task assignments, which come back as nested
+    // `assignments[]` objects on each /task/ response containing
+    // { assignee_id, name }. So we walk every Breezeway property, pull their
+    // housekeeping tasks, and harvest unique (id, name) pairs.
+    //
+    // Any active cleaner who has been assigned to at least one task in the
+    // queried window will be discovered this way.
+    const properties = await db.select().from(breezewayProperties);
+    console.log(
+      `[Sync] Harvesting Breezeway team from ${properties.length} properties' tasks...`
+    );
+
+    // Map: numeric Breezeway assignee_id → harvested name
+    const discovered = new Map<number, string>();
+    let tasksScanned = 0;
+    let propertiesWithErrors = 0;
+
+    for (const property of properties) {
+      try {
+        let page = 1;
+        const MAX_PAGES_PER_PROP = 10; // 10 * 100 = 1000 tasks per property is plenty
+        while (page <= MAX_PAGES_PER_PROP) {
+          const params: Record<string, any> = {
+            type_department: "housekeeping",
+            limit: 100,
+            page,
+          };
+          if (property.referencePropertyId) {
+            params.reference_property_id = property.referencePropertyId;
+          } else {
+            params.home_id = Number(property.breezewayId);
+          }
+          const response = await client.get<{
+            results?: Array<{
+              assignments?: Array<{ assignee_id: number; name?: string }>;
+            }>;
+            total_pages?: number;
+          }>("/task/", params);
+
+          const tasks = response.results || [];
+          tasksScanned += tasks.length;
+          for (const t of tasks) {
+            for (const a of t.assignments || []) {
+              const id = Number(a.assignee_id);
+              if (!Number.isFinite(id)) continue;
+              // Prefer the first non-empty name we see
+              const existingName = discovered.get(id);
+              if (!existingName && a.name) {
+                discovered.set(id, a.name);
+              } else if (!discovered.has(id)) {
+                discovered.set(id, a.name ?? "");
+              }
+            }
+          }
+          if (
+            tasks.length === 0 ||
+            (response.total_pages && page >= response.total_pages)
+          )
+            break;
+          page++;
+        }
+      } catch (e: any) {
+        propertiesWithErrors++;
+        console.warn(
+          `[Sync] Team harvest failed for property ${property.breezewayId}: ${e?.message ?? e}`
+        );
+      }
     }
-    console.log(`[Sync] Fetched ${users.length} Breezeway team members (paginated)`);
+
+    console.log(
+      `[Sync] Team harvest scanned ${tasksScanned} tasks, discovered ${discovered.size} unique team members (${propertiesWithErrors} properties errored)`
+    );
 
     const { breezewayTeam } = await import("../drizzle/schema");
 
-    for (const user of users) {
+    for (const [assigneeId, rawName] of discovered) {
       try {
-        const breezewayId = String(user.id);
-
-        // /team/ returns a combined `name` field. Fall back to splitting
-        // it into first/last if the API doesn't also provide them directly.
-        let firstName: string | null = user.first_name || user.firstName || null;
-        let lastName: string | null = user.last_name || user.lastName || null;
-        if (!firstName && !lastName && typeof user.name === "string") {
-          const parts = user.name.trim().split(/\s+/);
-          firstName = parts[0] ?? null;
-          lastName = parts.length > 1 ? parts.slice(1).join(" ") : null;
-        }
+        const breezewayId = String(assigneeId);
+        const parts = (rawName || "").trim().split(/\s+/).filter(Boolean);
+        const firstName = parts[0] ?? null;
+        const lastName = parts.length > 1 ? parts.slice(1).join(" ") : null;
 
         // Upsert by breezewayId
         const existing = await db
@@ -287,31 +333,34 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
           .limit(1);
 
         if (existing.length > 0) {
+          // Only overwrite first/last name if we have a non-null value —
+          // never clobber a good name with an empty one.
+          const patch: Record<string, any> = {
+            active: true,
+            syncedAt: new Date(),
+          };
+          if (firstName) patch.firstName = firstName;
+          if (lastName) patch.lastName = lastName;
           await db
             .update(breezewayTeam)
-            .set({
-              firstName,
-              lastName,
-              email: user.email || null,
-              role: user.role || user.type || null,
-              active: user.status === "active" || user.active !== false,
-              syncedAt: new Date(),
-            })
+            .set(patch)
             .where(eq(breezewayTeam.breezewayId, breezewayId));
         } else {
           await db.insert(breezewayTeam).values({
             breezewayId,
             firstName,
             lastName,
-            email: user.email || null,
-            role: user.role || user.type || null,
-            active: user.status === "active" || user.active !== false,
+            email: null,
+            role: null,
+            active: true,
             syncedAt: new Date(),
           });
         }
         synced++;
       } catch (e: any) {
-        console.error(`[Sync] Failed to upsert Breezeway team member ${user.id}: ${e.message}`);
+        console.error(
+          `[Sync] Failed to upsert harvested team member ${assigneeId}: ${e.message}`
+        );
         errors++;
       }
     }
