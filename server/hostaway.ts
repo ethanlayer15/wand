@@ -47,28 +47,61 @@ class HostawayClient {
   }
 
   async get<T>(path: string, params?: Record<string, any>): Promise<T> {
-    const resp = await this.client.get(path, { params });
-    return resp.data;
+    try {
+      const resp = await this.client.get(path, { params });
+      return resp.data;
+    } catch (err: any) {
+      // Surface the actual Hostaway error body so we can diagnose 4xx/5xx
+      // failures. Axios buries the response body under err.response.data.
+      const status = err?.response?.status;
+      const body = err?.response?.data;
+      const bodyStr =
+        typeof body === "string"
+          ? body.slice(0, 500)
+          : body
+            ? JSON.stringify(body).slice(0, 500)
+            : "(no body)";
+      console.error(
+        `[Hostaway] GET ${path} failed: status=${status ?? "?"} params=${JSON.stringify(params ?? {})} body=${bodyStr}`
+      );
+      throw err;
+    }
   }
 
   async getListings(): Promise<any[]> {
-    // Hostaway's /listings endpoint paginates with limit+offset (default
-    // page size is 100). The previous implementation only pulled the first
-    // page, which is why we ended up with ~114 listings locally while
-    // Breezeway referenced 254 properties. Loop until we get a short page.
-    const all: any[] = [];
-    const limit = 100;
-    let offset = 0;
-    // Hard cap so a buggy API can't cause an infinite loop.
-    const maxPages = 50;
-    for (let page = 0; page < maxPages; page++) {
-      const resp = await this.get<{ result: any[] }>("/listings", { limit, offset });
-      const batch = resp.result || [];
-      all.push(...batch);
-      if (batch.length < limit) break;
-      offset += limit;
+    // First, try a single no-param call — that matches the legacy behaviour
+    // that we know returned ~100-114 rows without any 4xx errors.
+    const firstResp = await this.get<{ result: any[]; count?: number }>("/listings");
+    const first = firstResp.result || [];
+    console.log(`[Hostaway] /listings single call returned ${first.length} rows (count=${firstResp.count ?? "?"})`);
+
+    // If fewer than 100, there's no pagination to do.
+    if (first.length < 100) return first;
+
+    // Otherwise attempt paginated fetch using limit+offset (same pattern as
+    // /conversations which is known to work). If pagination 4xxs, fall back
+    // to whatever the single call gave us rather than failing the whole sync.
+    try {
+      const all: any[] = [...first];
+      const limit = 100;
+      let offset = first.length;
+      const maxPages = 50;
+      for (let page = 0; page < maxPages; page++) {
+        const resp = await this.get<{ result: any[] }>("/listings", { limit, offset });
+        const batch = resp.result || [];
+        if (batch.length === 0) break;
+        all.push(...batch);
+        if (batch.length < limit) break;
+        offset += limit;
+      }
+      console.log(`[Hostaway] /listings paginated total: ${all.length} rows`);
+      return all;
+    } catch (err: any) {
+      console.error(
+        `[Hostaway] /listings pagination failed (${err?.response?.status ?? "?"}) — falling back to single-page result of ${first.length}`
+      );
+      return first;
     }
-    return all;
   }
 
   async getReservations(listingId?: number): Promise<any[]> {
