@@ -255,9 +255,9 @@ export async function runReviewDrafter(limit = 10): Promise<DraftResult> {
       const confidence = review.rating && review.rating >= 4 ? 0.90 : 0.75;
 
       const title = `Reply to ${review.guestName || "guest"} — ${propertyName} (${review.rating || "?"}★)`;
-      const summary = review.aiSummary
-        ? `${review.sentiment === "negative" ? "⚠️" : "✅"} ${review.aiSummary}`
-        : `${review.rating || "?"}★ review from ${review.source}`;
+      // Show a preview of the draft as the summary (first ~120 chars)
+      const draftPreview = draft.length > 120 ? draft.slice(0, 120) + "…" : draft;
+      const summary = `${review.sentiment === "negative" ? "⚠️" : review.rating && review.rating >= 4 ? "✅" : "💬"} "${draftPreview}"`;
 
       await insertSuggestion({
         agentName: "review_drafter",
