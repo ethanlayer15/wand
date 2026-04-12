@@ -195,6 +195,7 @@ export async function sendCleaningReportsForNewCleans(newCleanIds: number[]): Pr
       propertyName: completedCleans.propertyName,
       scheduledDate: completedCleans.scheduledDate,
       reportUrl: completedCleans.reportUrl,
+      taskTitle: completedCleans.taskTitle,
     })
     .from(completedCleans)
     .where(inArray(completedCleans.id, newCleanIds));
@@ -206,6 +207,13 @@ export async function sendCleaningReportsForNewCleans(newCleanIds: number[]): Pr
       continue;
     }
 
+    // Only send reports for turnover cleans and deep cleans
+    const title = (clean.taskTitle || "").toLowerCase().trim();
+    if (!title.includes("turnover clean") && title !== "deep clean") {
+      result.skipped++;
+      continue;
+    }
+
     try {
       await sendCleaningReport({
         id: clean.id,
@@ -213,6 +221,7 @@ export async function sendCleaningReportsForNewCleans(newCleanIds: number[]): Pr
         listingId: clean.listingId,
         propertyName: clean.propertyName,
         scheduledDate: clean.scheduledDate,
+        reportUrl: clean.reportUrl,
       });
       result.sent++;
     } catch (err: any) {
