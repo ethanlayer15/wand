@@ -21,6 +21,7 @@ function buildSmsContent(opts: {
   propertyName: string;
   scheduledDate: Date | null;
   breezewayTaskId: string;
+  reportUrl?: string | null;
 }): string {
   const dateStr = opts.scheduledDate
     ? opts.scheduledDate.toLocaleDateString("en-US", {
@@ -29,8 +30,8 @@ function buildSmsContent(opts: {
         year: "numeric",
       })
     : "N/A";
-  const reportUrl = `https://app.breezeway.io/task/${opts.breezewayTaskId}`;
-  return `Turnover clean completed for ${opts.propertyName} (${dateStr}). View report: ${reportUrl}`;
+  const link = opts.reportUrl || `https://app.breezeway.io/task/${opts.breezewayTaskId}`;
+  return `Turnover clean completed for ${opts.propertyName} (${dateStr}). View report: ${link}`;
 }
 
 // ── Slack Notification ─────────────────────────────────────────────
@@ -71,6 +72,7 @@ async function sendCleaningReport(clean: {
   listingId: number | null;
   propertyName: string | null;
   scheduledDate: Date | string | null;
+  reportUrl?: string | null;
 }): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -123,6 +125,7 @@ async function sendCleaningReport(clean: {
     propertyName,
     scheduledDate: clean.scheduledDate ? new Date(clean.scheduledDate as any) : null,
     breezewayTaskId: clean.breezewayTaskId,
+    reportUrl: clean.reportUrl,
   });
 
   try {
@@ -191,6 +194,7 @@ export async function sendCleaningReportsForNewCleans(newCleanIds: number[]): Pr
       listingId: completedCleans.listingId,
       propertyName: completedCleans.propertyName,
       scheduledDate: completedCleans.scheduledDate,
+      reportUrl: completedCleans.reportUrl,
     })
     .from(completedCleans)
     .where(inArray(completedCleans.id, newCleanIds));

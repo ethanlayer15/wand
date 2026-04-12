@@ -40,6 +40,8 @@ interface BreezewayTaskResponse {
     name: string;
     type_task_user_status: string;
   }>;
+  report_url?: string;
+  finished_at?: string;
 }
 
 interface CleanSyncResult {
@@ -511,6 +513,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
           listingId: listing.id,
           propertyName,
           taskTitle: task.name || null,
+          reportUrl: task.report_url || null,
           scheduledDate,
           completedDate: task.completed_at ? new Date(task.completed_at) : scheduledDate,
           cleaningFee,
@@ -533,6 +536,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
               listingId: listing.id,
               propertyName,
               taskTitle: task.name || null,
+          reportUrl: task.report_url || null,
               scheduledDate,
               completedDate: task.completed_at ? new Date(task.completed_at) : scheduledDate,
               cleaningFee,

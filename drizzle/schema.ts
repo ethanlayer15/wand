@@ -806,7 +806,8 @@ export const completedCleans = mysqlTable("completedCleans", {
   cleanerId: int("cleanerId"), // FK to cleaners.id (matched by assignee)
   listingId: int("listingId"), // FK to listings.id (matched by property)
   propertyName: varchar("propertyName", { length: 256 }),
-  taskTitle: varchar("taskTitle", { length: 256 }),    // Breezeway task name, e.g. "Turnover Clean"
+  taskTitle: varchar("taskTitle", { length: 256 }),
+  reportUrl: text("reportUrl"), // Breezeway portal report link    // Breezeway task name, e.g. "Turnover Clean"
   scheduledDate: timestamp("scheduledDate"), // when the clean was scheduled
   completedDate: timestamp("completedDate"), // when the clean was actually completed
   cleaningFee: decimal("cleaningFee", { precision: 10, scale: 2 }), // the property's cleaning fee at time of clean
