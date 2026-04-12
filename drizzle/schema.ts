@@ -96,10 +96,28 @@ export const reviews = mysqlTable("reviews", {
     quote: string;
     confidence: "high" | "medium" | "low";
   }>>(),
+  // Unified analyzer enrichment (populated alongside aiIssues/aiSummary by
+  // the unified review analyzer; mirrored into reviewAnalysis for legacy
+  // consumers, see analyzeReviewUnified in server/reviewAnalyzer.ts).
+  aiSentimentScore: int("aiSentimentScore"),              // -100 to 100
+  aiCategories: json("aiCategories").$type<string[]>(),   // ["cleaning", "maintenance", …]
+  aiHighlights: json("aiHighlights").$type<string[]>(),   // positive mentions
+  aiCleanerMentioned: varchar("aiCleanerMentioned", { length: 256 }),
   taskId: int("taskId"),               // FK → tasks.id, links review to auto-created task
   arrivalDate: timestamp("arrivalDate"),
   departureDate: timestamp("departureDate"),
   channelId: int("channelId"),
+  // Host response lifecycle. `hostResponse`/`hostResponseSubmittedAt` are read
+  // from Hostaway on every sync and represent the live reply-on-record.
+  // `hostResponseDraft` + `hostResponseStatus` are owned by Wand — a user or
+  // the Wanda agent can draft a reply here, and a future Phase 2 mutation
+  // will publish drafts back to Hostaway.
+  hostResponse: text("hostResponse"),
+  hostResponseSubmittedAt: timestamp("hostResponseSubmittedAt"),
+  hostResponseDraft: text("hostResponseDraft"),
+  hostResponseStatus: mysqlEnum("hostResponseStatus", ["none", "draft", "submitted", "failed"])
+    .default("none"),
+  hostResponseError: text("hostResponseError"),           // last submit error message, if status=failed
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
