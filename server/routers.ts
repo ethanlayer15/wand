@@ -256,6 +256,11 @@ export const appRouter = router({
         );
       }),
 
+    /** List Breezeway properties (for linking manual listings) */
+    breezewayProperties: managerProcedure.query(async () => {
+      return getBreezewayProperties();
+    }),
+
     /** Create a manual (5STR-only) listing not sourced from Hostaway */
     createManual: managerProcedure
       .input(
@@ -265,6 +270,7 @@ export const appRouter = router({
           address: z.string().optional(),
           city: z.string().optional(),
           state: z.string().optional(),
+          breezewayPropertyId: z.string().optional(),
         })
       )
       .mutation(async ({ input }) => {
@@ -281,6 +287,7 @@ export const appRouter = router({
           city: input.city?.trim() || null,
           state: input.state?.trim() || null,
           source: "manual",
+          breezewayPropertyId: input.breezewayPropertyId?.trim() || null,
         });
         return { id: result.insertId, hostawayId };
       }),
@@ -296,6 +303,7 @@ export const appRouter = router({
           city: z.string().optional(),
           state: z.string().optional(),
           status: z.enum(["active", "inactive", "archived"]).optional(),
+          breezewayPropertyId: z.string().nullable().optional(),
         })
       )
       .mutation(async ({ input }) => {
@@ -317,6 +325,7 @@ export const appRouter = router({
         if (updates.city !== undefined) cleanUpdates.city = updates.city?.trim() || null;
         if (updates.state !== undefined) cleanUpdates.state = updates.state?.trim() || null;
         if (updates.status) cleanUpdates.status = updates.status;
+        if (updates.breezewayPropertyId !== undefined) cleanUpdates.breezewayPropertyId = updates.breezewayPropertyId?.trim() || null;
         await db.update(listingsTable).set(cleanUpdates).where(eq(listingsTable.id, id));
         return { success: true };
       }),

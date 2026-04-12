@@ -44,6 +44,8 @@ export const listings = mysqlTable("listings", {
   country: varchar("country", { length: 64 }),
   guestCapacity: int("guestCapacity"),
   source: mysqlEnum("source", ["hostaway", "manual"]).default("hostaway").notNull(),
+  breezewayPropertyId: varchar("breezewayPropertyId", { length: 64 }), // direct link to breezeway property for manual listings
+  airbnbListingUrl: text("airbnbListingUrl"), // future: pull reviews directly from Airbnb
   status: mysqlEnum("status", ["active", "inactive", "archived"])
     .default("active")
     .notNull(),

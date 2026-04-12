@@ -801,10 +801,12 @@ function ListingGrid({ listings, isLoading, onSelect }: { listings: any[]; isLoa
 
 function AddManualListingForm({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
+  const { data: bwProperties } = trpc.listings.breezewayProperties.useQuery();
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
+  const [breezewayPropertyId, setBreezewayPropertyId] = useState("");
 
   const createMut = trpc.listings.createManual.useMutation({
     onSuccess: () => {
@@ -824,6 +826,32 @@ function AddManualListingForm({ onClose }: { onClose: () => void }) {
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Skyland" className="h-8 text-sm" />
         </div>
         <div className="col-span-2">
+          <Label className="text-xs">Breezeway Property</Label>
+          <select
+            value={breezewayPropertyId}
+            onChange={(e) => {
+              setBreezewayPropertyId(e.target.value);
+              // Auto-fill address/city from Breezeway if empty
+              if (e.target.value && bwProperties) {
+                const bwProp = bwProperties.find((p: any) => String(p.breezewayId) === e.target.value);
+                if (bwProp) {
+                  if (!address && bwProp.address) setAddress(bwProp.address);
+                  if (!city && bwProp.city) setCity(bwProp.city);
+                  if (!name && bwProp.name) setName(bwProp.name);
+                }
+              }
+            }}
+            className="w-full h-8 text-sm rounded-md border bg-background px-3"
+          >
+            <option value="">— Select Breezeway property —</option>
+            {bwProperties?.map((p: any) => (
+              <option key={p.breezewayId} value={p.breezewayId}>
+                {p.name} {p.city ? `(${p.city})` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="col-span-2">
           <Label className="text-xs">Address</Label>
           <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St" className="h-8 text-sm" />
         </div>
@@ -839,7 +867,13 @@ function AddManualListingForm({ onClose }: { onClose: () => void }) {
       <div className="flex gap-2 justify-end">
         <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onClose}>Cancel</Button>
         <Button size="sm" className="h-7 text-xs" disabled={!name.trim() || createMut.isPending}
-          onClick={() => createMut.mutate({ name: name.trim(), address: address.trim() || undefined, city: city.trim() || undefined, state: state.trim() || undefined })}>
+          onClick={() => createMut.mutate({
+            name: name.trim(),
+            address: address.trim() || undefined,
+            city: city.trim() || undefined,
+            state: state.trim() || undefined,
+            breezewayPropertyId: breezewayPropertyId || undefined,
+          })}>
           {createMut.isPending ? "Adding..." : "Add Property"}
         </Button>
       </div>

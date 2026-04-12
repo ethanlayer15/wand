@@ -188,12 +188,28 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
       return parts[0] ?? raw;
     };
 
+    // Tier 0 map: listings that have a direct breezewayPropertyId set
+    const bwIdToManualListing = new Map<string, typeof allListings[0]>();
+    for (const l of allListings) {
+      if (l.breezewayPropertyId) {
+        bwIdToManualListing.set(String(l.breezewayPropertyId), l);
+      }
+    }
+
     const bwHomeIdToListing = new Map<number, typeof allListings[0]>();
-    let matchA = 0, matchB = 0, matchC = 0, matchD = 0, matchE = 0, matchNone = 0;
+    let match0 = 0, matchA = 0, matchB = 0, matchC = 0, matchD = 0, matchE = 0, matchNone = 0;
     let unmatchedWithRefId = 0;
     const unmatchedSamples: string[] = [];
     for (const p of properties) {
       let listing: typeof allListings[0] | undefined;
+
+      // Tier 0: direct breezewayPropertyId on listing (manual/5STR-only properties)
+      listing = bwIdToManualListing.get(String(p.breezewayId));
+      if (listing) {
+        bwHomeIdToListing.set(Number(p.breezewayId), listing);
+        match0++;
+        continue;
+      }
 
       // Tier A: referencePropertyId → hostawayId
       if (p.referencePropertyId) {
@@ -277,7 +293,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
     }
 
     console.log(
-      `[CleanSync] Property match: ${properties.length} bw props vs ${allListings.length} listings · A-refId=${matchA} · B-internalName=${matchB} · C-name=${matchC} · D-address=${matchD} · E-substring=${matchE} · unmatched=${matchNone} (${unmatchedWithRefId} of those had a refId but no listing in DB)`
+      `[CleanSync] Property match: ${properties.length} bw props vs ${allListings.length} listings · 0-direct=${match0} · A-refId=${matchA} · B-internalName=${matchB} · C-name=${matchC} · D-address=${matchD} · E-substring=${matchE} · unmatched=${matchNone} (${unmatchedWithRefId} of those had a refId but no listing in DB)`
     );
     if (unmatchedSamples.length > 0) {
       console.log(`[CleanSync] Unmatched property samples:`);
