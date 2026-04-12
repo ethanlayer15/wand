@@ -76,15 +76,20 @@ export function getNextTierInfo(score: number | null): {
 /**
  * Only turnover cleans and deep cleans should count toward review scores.
  * Matches titles like "Turnover Clean", "Same Day Turnover Clean",
- * "11 am checkout Turnover Clean", "Deep Clean", etc.
+ * "11 am checkout Turnover Clean", "Deep Clean", "DEEP CLEAN", etc.
  *
- * Cleans without a taskTitle (synced before we stored it) are included
- * by default so we don't silently drop historical data.
+ * Does NOT match maintenance tasks that merely contain "deep clean" as a
+ * substring (e.g. "Deep clean shower grout") — the title must be primarily
+ * a deep clean task, not a targeted maintenance item.
  */
 export function isScorableClean(taskTitle: string | null | undefined): boolean {
-  if (!taskTitle) return true; // legacy rows without title — include by default
-  const t = taskTitle.toLowerCase();
-  return t.includes("turnover clean") || t.includes("deep clean");
+  if (!taskTitle) return false;
+  const t = taskTitle.toLowerCase().trim();
+  if (t.includes("turnover clean")) return true;
+  // "Deep Clean" or "DEEP CLEAN" as the primary task — not a substring
+  // in a longer maintenance description like "Deep clean shower grout"
+  if (t === "deep clean") return true;
+  return false;
 }
 
 // ── Rolling Score Calculation ───────────────────────────────────────
