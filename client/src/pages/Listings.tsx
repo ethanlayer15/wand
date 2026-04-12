@@ -44,6 +44,7 @@ import {
   Trash2,
   ShieldCheck,
   Building2,
+  Hash,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -612,6 +613,76 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
         <p className="text-xs text-muted-foreground italic">
           No recipients configured. Add phone numbers above to receive cleaning report SMS.
         </p>
+      )}
+
+      {/* Slack webhook */}
+      {isAdmin && <SlackWebhookConfig listingId={listingId} />}
+    </div>
+  );
+}
+
+function SlackWebhookConfig({ listingId }: { listingId: number }) {
+  const utils = trpc.useUtils();
+  const { data, isLoading } = trpc.cleaningReports.getSlackWebhook.useQuery({ listingId });
+  const [editing, setEditing] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+
+  const setMut = trpc.cleaningReports.setSlackWebhook.useMutation({
+    onSuccess: () => {
+      utils.cleaningReports.getSlackWebhook.invalidate({ listingId });
+      setEditing(false);
+      toast.success(webhookUrl ? "Slack webhook saved" : "Slack webhook removed");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const currentUrl = data?.webhookUrl;
+
+  return (
+    <div className="pt-2 border-t space-y-2">
+      <h4 className="text-sm font-semibold flex items-center gap-2">
+        <Hash className="h-4 w-4 text-purple-500" />
+        Slack Channel
+      </h4>
+      <p className="text-xs text-muted-foreground">
+        Optionally post cleaning reports to a Slack channel via incoming webhook.
+      </p>
+
+      {isLoading ? (
+        <Skeleton className="h-8" />
+      ) : editing ? (
+        <div className="space-y-2">
+          <Input
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder="https://hooks.slack.com/services/..."
+            className="h-8 text-sm"
+          />
+          <div className="flex gap-2 justify-end">
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditing(false)}>Cancel</Button>
+            {currentUrl && (
+              <Button variant="outline" size="sm" className="h-7 text-xs text-destructive" disabled={setMut.isPending}
+                onClick={() => { setWebhookUrl(""); setMut.mutate({ listingId, webhookUrl: null }); }}>
+                Remove
+              </Button>
+            )}
+            <Button size="sm" className="h-7 text-xs" disabled={!webhookUrl.trim() || setMut.isPending}
+              onClick={() => setMut.mutate({ listingId, webhookUrl: webhookUrl.trim() })}>
+              {setMut.isPending ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </div>
+      ) : currentUrl ? (
+        <div className="flex items-center justify-between px-3 py-2 rounded-md border bg-card">
+          <p className="text-sm text-muted-foreground truncate">{currentUrl.replace(/https:\/\/hooks\.slack\.com\/services\//, "hooks.slack.com/...")}</p>
+          <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0" onClick={() => { setWebhookUrl(currentUrl); setEditing(true); }}>
+            <Pencil className="h-3 w-3 mr-1" /> Edit
+          </Button>
+        </div>
+      ) : (
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setWebhookUrl(""); setEditing(true); }}>
+          <Plus className="h-3 w-3 mr-1" /> Add Slack Webhook
+        </Button>
       )}
     </div>
   );

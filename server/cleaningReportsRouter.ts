@@ -6,7 +6,7 @@ import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
 import { protectedProcedure, managerProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
-import { cleaningReportRecipients, cleaningReportsSent } from "../drizzle/schema";
+import { cleaningReportRecipients, cleaningReportsSent, listings } from "../drizzle/schema";
 
 /** E.164 phone number: +1XXXXXXXXXX */
 const phoneNumberSchema = z.string().regex(/^\+1\d{10}$/, "Phone number must be in +1XXXXXXXXXX format");
@@ -52,6 +52,36 @@ export const cleaningReportsRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
       await db.delete(cleaningReportRecipients).where(eq(cleaningReportRecipients.id, input.id));
+      return { success: true };
+    }),
+
+  /** Get the Slack webhook URL for a listing */
+  getSlackWebhook: protectedProcedure
+    .input(z.object({ listingId: z.number() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return { webhookUrl: null };
+      const [row] = await db
+        .select({ webhookUrl: listings.cleaningReportSlackWebhook })
+        .from(listings)
+        .where(eq(listings.id, input.listingId))
+        .limit(1);
+      return { webhookUrl: row?.webhookUrl ?? null };
+    }),
+
+  /** Set or clear the Slack webhook URL for a listing */
+  setSlackWebhook: managerProcedure
+    .input(z.object({
+      listingId: z.number(),
+      webhookUrl: z.string().url().nullable(),
+    }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+      await db
+        .update(listings)
+        .set({ cleaningReportSlackWebhook: input.webhookUrl })
+        .where(eq(listings.id, input.listingId));
       return { success: true };
     }),
 

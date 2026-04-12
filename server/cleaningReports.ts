@@ -11,6 +11,7 @@ import {
   cleaningReportRecipients,
   cleaningReportsSent,
   completedCleans,
+  listings,
 } from "../drizzle/schema";
 import { eq, inArray } from "drizzle-orm";
 
@@ -30,6 +31,20 @@ function buildSmsContent(opts: {
     : "N/A";
   const reportUrl = `https://app.breezeway.io/task/${opts.breezewayTaskId}`;
   return `Turnover clean completed for ${opts.propertyName} (${dateStr}). View report: ${reportUrl}`;
+}
+
+// ── Slack Notification ─────────────────────────────────────────────
+
+async function postCleaningReportToSlack(webhookUrl: string, content: string): Promise<void> {
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: content }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Slack webhook failed (${res.status}): ${body.slice(0, 200)}`);
+  }
 }
 
 // ── Core Functions ──────────────────────────────────────────────────
@@ -100,8 +115,25 @@ async function sendCleaningReport(clean: {
   });
 
   try {
+    // Send SMS to phone recipients
     for (const recipient of recipients) {
       await sendSms({ to: recipient.phoneNumber, content });
+    }
+
+    // Send to Slack if configured for this property
+    const [listing] = await db
+      .select({ slackWebhook: listings.cleaningReportSlackWebhook })
+      .from(listings)
+      .where(eq(listings.id, clean.listingId))
+      .limit(1);
+
+    if (listing?.slackWebhook) {
+      try {
+        await postCleaningReportToSlack(listing.slackWebhook, content);
+        console.log(`[CleaningReports] Slack notification sent for ${propertyName}`);
+      } catch (slackErr: any) {
+        console.error(`[CleaningReports] Slack failed for ${propertyName}:`, slackErr.message);
+      }
     }
 
     await db.insert(cleaningReportsSent).values({

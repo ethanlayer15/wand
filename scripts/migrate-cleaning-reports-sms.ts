@@ -45,6 +45,21 @@ async function main() {
     }
   }
 
+  // 3. listings: add cleaningReportSlackWebhook column
+  try {
+    await conn.execute(`
+      ALTER TABLE listings
+      ADD COLUMN cleaningReportSlackWebhook TEXT NULL
+    `);
+    console.log("✓ Added listings.cleaningReportSlackWebhook");
+  } catch (e: any) {
+    if (e.message.includes("Duplicate column")) {
+      console.log("⏭ listings.cleaningReportSlackWebhook already exists");
+    } else {
+      throw e;
+    }
+  }
+
   // Verify
   const [recipCols] = await conn.execute(`SHOW COLUMNS FROM cleaningReportRecipients`) as any;
   const [sentCols] = await conn.execute(`SHOW COLUMNS FROM cleaningReportsSent`) as any;

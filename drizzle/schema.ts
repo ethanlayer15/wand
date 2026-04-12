@@ -54,6 +54,7 @@ export const listings = mysqlTable("listings", {
   distanceFromStorage: decimal("distanceFromStorage", { precision: 6, scale: 2 }), // one-way miles
   cleaningFeeCharge: decimal("cleaningFeeCharge", { precision: 10, scale: 2 }), // what 5STR charges the customer
   podId: int("podId"), // FK to pods.id — which geographic pod this property belongs to
+  cleaningReportSlackWebhook: text("cleaningReportSlackWebhook"), // per-property Slack incoming webhook for cleaning reports
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
