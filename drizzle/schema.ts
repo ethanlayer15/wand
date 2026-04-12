@@ -858,13 +858,13 @@ export type InsertWeeklyPaySnapshot = typeof weeklyPaySnapshots.$inferInsert;
 // ── Cleaning Report Recipients ──────────────────────────────────────
 
 /**
- * Per-property email recipients for automated cleaning reports.
- * Supports multiple emails per property (e.g., owner + property manager).
+ * Per-property SMS recipients for automated cleaning reports via Quo.
+ * Supports multiple phone numbers per property (e.g., owner + property manager).
  */
 export const cleaningReportRecipients = mysqlTable("cleaningReportRecipients", {
   id: int("id").autoincrement().primaryKey(),
   listingId: int("listingId").notNull(),
-  email: varchar("email", { length: 320 }).notNull(),
+  phoneNumber: varchar("phoneNumber", { length: 20 }).notNull(),
   name: varchar("name", { length: 256 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -875,14 +875,14 @@ export type InsertCleaningReportRecipient = typeof cleaningReportRecipients.$inf
 // ── Cleaning Reports Sent ───────────────────────────────────────────
 
 /**
- * Tracks which completed cleans have had report emails sent.
+ * Tracks which completed cleans have had report SMS sent via Quo.
  * Prevents duplicate sends and provides an audit trail.
  */
 export const cleaningReportsSent = mysqlTable("cleaningReportsSent", {
   id: int("id").autoincrement().primaryKey(),
   completedCleanId: int("completedCleanId").notNull(),
   breezewayTaskId: varchar("breezewayTaskId", { length: 128 }).notNull(),
-  recipientEmails: text("recipientEmails").notNull(),
+  recipientPhoneNumbers: text("recipientPhoneNumbers").notNull(),
   status: mysqlEnum("reportStatus", ["sent", "failed", "no_recipients"]).default("sent").notNull(),
   errorMessage: text("errorMessage"),
   sentAt: timestamp("sentAt").defaultNow().notNull(),

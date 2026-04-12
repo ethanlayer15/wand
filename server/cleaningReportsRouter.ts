@@ -1,5 +1,5 @@
 /**
- * Cleaning Reports Router — manage per-property email recipients
+ * Cleaning Reports Router — manage per-property SMS recipients
  * and view sent report history.
  */
 import { z } from "zod";
@@ -7,6 +7,9 @@ import { eq, desc } from "drizzle-orm";
 import { protectedProcedure, managerProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import { cleaningReportRecipients, cleaningReportsSent } from "../drizzle/schema";
+
+/** E.164 phone number: +1XXXXXXXXXX */
+const phoneNumberSchema = z.string().regex(/^\+1\d{10}$/, "Phone number must be in +1XXXXXXXXXX format");
 
 export const cleaningReportsRouter = router({
   /** List recipients for a listing */
@@ -22,12 +25,12 @@ export const cleaningReportsRouter = router({
         .orderBy(cleaningReportRecipients.name);
     }),
 
-  /** Add a recipient email for a listing */
+  /** Add a recipient phone number for a listing */
   addRecipient: managerProcedure
     .input(
       z.object({
         listingId: z.number(),
-        email: z.string().email(),
+        phoneNumber: phoneNumberSchema,
         name: z.string().optional(),
       })
     )
@@ -36,7 +39,7 @@ export const cleaningReportsRouter = router({
       if (!db) throw new Error("Database not available");
       await db.insert(cleaningReportRecipients).values({
         listingId: input.listingId,
-        email: input.email.trim().toLowerCase(),
+        phoneNumber: input.phoneNumber.trim(),
         name: input.name?.trim() || null,
       });
       return { success: true };
@@ -64,7 +67,7 @@ export const cleaningReportsRouter = router({
         .select({
           id: cleaningReportsSent.id,
           breezewayTaskId: cleaningReportsSent.breezewayTaskId,
-          recipientEmails: cleaningReportsSent.recipientEmails,
+          recipientPhoneNumbers: cleaningReportsSent.recipientPhoneNumbers,
           status: cleaningReportsSent.status,
           errorMessage: cleaningReportsSent.errorMessage,
           sentAt: cleaningReportsSent.sentAt,

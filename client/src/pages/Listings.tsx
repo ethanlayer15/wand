@@ -517,13 +517,21 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
   const utils = trpc.useUtils();
   const { data: recipients, isLoading } = trpc.cleaningReports.getRecipients.useQuery({ listingId });
   const [showForm, setShowForm] = useState(false);
-  const [email, setEmail] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [name, setName] = useState("");
+
+  /** Normalize input to E.164: strip non-digits, prepend +1 if needed */
+  function toE164(raw: string): string {
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+    return raw.trim(); // let server validation catch bad formats
+  }
 
   const addMut = trpc.cleaningReports.addRecipient.useMutation({
     onSuccess: () => {
       utils.cleaningReports.getRecipients.invalidate({ listingId });
-      setEmail("");
+      setPhoneNumber("");
       setName("");
       setShowForm(false);
       toast.success("Recipient added");
@@ -543,7 +551,7 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-semibold flex items-center gap-2">
-          <Mail className="h-4 w-4 text-blue-500" />
+          <Phone className="h-4 w-4 text-blue-500" />
           Cleaning Report Recipients
         </h4>
         {isAdmin && (
@@ -554,7 +562,7 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
       </div>
 
       <p className="text-xs text-muted-foreground">
-        These emails receive an automatic report when a turnover clean is completed.
+        These numbers receive an automatic SMS when a turnover clean is completed.
       </p>
 
       {/* Add form */}
@@ -562,8 +570,8 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
         <div className="rounded-lg border p-3 bg-muted/30 space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <Label className="text-xs">Email *</Label>
-              <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@example.com" className="h-8 text-sm" />
+              <Label className="text-xs">Phone Number *</Label>
+              <Input value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} placeholder="(828) 555-1234" className="h-8 text-sm" type="tel" />
             </div>
             <div>
               <Label className="text-xs">Name</Label>
@@ -572,8 +580,8 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
           </div>
           <div className="flex gap-2 justify-end">
             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowForm(false)}>Cancel</Button>
-            <Button size="sm" className="h-7 text-xs" disabled={!email.trim() || addMut.isPending}
-              onClick={() => addMut.mutate({ listingId, email: email.trim(), name: name.trim() || undefined })}>
+            <Button size="sm" className="h-7 text-xs" disabled={!phoneNumber.trim() || addMut.isPending}
+              onClick={() => addMut.mutate({ listingId, phoneNumber: toE164(phoneNumber), name: name.trim() || undefined })}>
               {addMut.isPending ? "Adding..." : "Add Recipient"}
             </Button>
           </div>
@@ -588,12 +596,12 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
           {recipients.map((r: any) => (
             <div key={r.id} className="flex items-center justify-between px-3 py-2 rounded-md border bg-card">
               <div className="min-w-0">
-                <p className="text-sm">{r.email}</p>
+                <p className="text-sm">{r.phoneNumber}</p>
                 {r.name && <p className="text-xs text-muted-foreground">{r.name}</p>}
               </div>
               {isAdmin && (
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive shrink-0"
-                  onClick={() => { if (confirm(`Remove ${r.email}?`)) removeMut.mutate({ id: r.id }); }}>
+                  onClick={() => { if (confirm(`Remove ${r.phoneNumber}?`)) removeMut.mutate({ id: r.id }); }}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               )}
@@ -602,7 +610,7 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
         </div>
       ) : (
         <p className="text-xs text-muted-foreground italic">
-          No recipients configured. Add emails above to receive cleaning reports.
+          No recipients configured. Add phone numbers above to receive cleaning report SMS.
         </p>
       )}
     </div>

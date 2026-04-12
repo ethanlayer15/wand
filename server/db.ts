@@ -74,7 +74,7 @@ export async function getDb() {
           CREATE TABLE IF NOT EXISTS cleaningReportRecipients (
             id INT AUTO_INCREMENT PRIMARY KEY,
             listingId INT NOT NULL,
-            email VARCHAR(320) NOT NULL,
+            phoneNumber VARCHAR(20) NOT NULL,
             name VARCHAR(256),
             createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
           )
@@ -84,7 +84,7 @@ export async function getDb() {
             id INT AUTO_INCREMENT PRIMARY KEY,
             completedCleanId INT NOT NULL,
             breezewayTaskId VARCHAR(128) NOT NULL,
-            recipientEmails TEXT NOT NULL,
+            recipientPhoneNumbers TEXT NOT NULL,
             reportStatus ENUM('sent', 'failed', 'no_recipients') DEFAULT 'sent' NOT NULL,
             errorMessage TEXT,
             sentAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL

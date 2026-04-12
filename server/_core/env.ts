@@ -22,6 +22,9 @@ export const ENV = {
   // Gmail (Viv email concierge)
   gmailUser: process.env.GMAIL_USER ?? "",
   gmailAppPassword: process.env.GMAIL_APP_PASSWORD ?? "",
+  // Quo (OpenPhone) SMS
+  quoApiKey: process.env.QUO_API_KEY ?? "",
+  quoPhoneNumber: process.env.QUO_PHONE_NUMBER ?? "+18287823571",
   // Slack
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? "",
   // Google OAuth
