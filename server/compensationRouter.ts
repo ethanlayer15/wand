@@ -19,6 +19,7 @@ import {
   bulkUpdatePropertyCompensation,
   calculateMileageReimbursement,
   calculateCleanBonus,
+  isScorableClean,
 } from "./compensation";
 import {
   runCleanerAttribution,
@@ -244,7 +245,7 @@ export const compensationRouter = router({
 
       for (const cleaner of activeCleaners) {
         const myCleans = recentCleans.filter(
-          (c) => c.cleanerId === cleaner.id && c.listingId != null && c.scheduledDate != null
+          (c) => c.cleanerId === cleaner.id && c.listingId != null && c.scheduledDate != null && isScorableClean(c.taskTitle)
         );
         const myListingIds = new Set(myCleans.map((c) => c.listingId!));
         const cleansByListing = new Map<number, Date[]>();

@@ -71,6 +71,22 @@ export function getNextTierInfo(score: number | null): {
   };
 }
 
+// ── Task title filter ──────────────────────────────────────────────
+
+/**
+ * Only turnover cleans and deep cleans should count toward review scores.
+ * Matches titles like "Turnover Clean", "Same Day Turnover Clean",
+ * "11 am checkout Turnover Clean", "Deep Clean", etc.
+ *
+ * Cleans without a taskTitle (synced before we stored it) are included
+ * by default so we don't silently drop historical data.
+ */
+export function isScorableClean(taskTitle: string | null | undefined): boolean {
+  if (!taskTitle) return true; // legacy rows without title — include by default
+  const t = taskTitle.toLowerCase();
+  return t.includes("turnover clean") || t.includes("deep clean");
+}
+
 // ── Rolling Score Calculation ───────────────────────────────────────
 
 /**
@@ -126,9 +142,11 @@ export async function calculateCleanerRollingScore(cleanerName: string, cleanerI
   }
 
   // Build a map: listingId → clean dates for this cleaner
+  // Only include turnover cleans and deep cleans for scoring
   const cleansByListing = new Map<number, Date[]>();
   for (const clean of cleanerCleans) {
     if (!clean.listingId || !clean.scheduledDate) continue;
+    if (!isScorableClean(clean.taskTitle)) continue;
     const existing = cleansByListing.get(clean.listingId) || [];
     existing.push(new Date(clean.scheduledDate));
     cleansByListing.set(clean.listingId, existing);
