@@ -46,6 +46,7 @@ import {
   Building2,
   Hash,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useState } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -516,10 +517,19 @@ function PropertyDetailSheet({
 
 function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; isAdmin: boolean }) {
   const utils = trpc.useUtils();
+  const { data: config } = trpc.cleaningReports.getConfig.useQuery({ listingId });
   const { data: recipients, isLoading } = trpc.cleaningReports.getRecipients.useQuery({ listingId });
   const [showForm, setShowForm] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [name, setName] = useState("");
+
+  const toggleMut = trpc.cleaningReports.setEnabled.useMutation({
+    onSuccess: () => {
+      utils.cleaningReports.getConfig.invalidate({ listingId });
+      toast.success(config?.enabled ? "Cleaning reports disabled" : "Cleaning reports enabled");
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
   /** Normalize input to E.164: strip non-digits, prepend +1 if needed */
   function toE164(raw: string): string {
@@ -553,18 +563,37 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-semibold flex items-center gap-2">
           <Phone className="h-4 w-4 text-blue-500" />
-          Cleaning Report Recipients
+          Cleaning Reports
         </h4>
+        <div className="flex items-center gap-2">
+          {isAdmin && (
+            <div className="flex items-center gap-1.5">
+              <Label className="text-xs text-muted-foreground">{config?.enabled ? "On" : "Off"}</Label>
+              <Switch
+                checked={config?.enabled ?? false}
+                onCheckedChange={(checked) => toggleMut.mutate({ listingId, enabled: checked })}
+                disabled={toggleMut.isPending}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {!config?.enabled ? (
+        <p className="text-xs text-muted-foreground italic">
+          Cleaning reports are disabled for this property. Toggle on to send SMS/Slack notifications when cleans are completed.
+        </p>
+      ) : <>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          These numbers receive an automatic SMS when a turnover clean is completed.
+        </p>
         {isAdmin && (
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowForm(!showForm)}>
             <Plus className="h-3 w-3 mr-1" /> Add
           </Button>
         )}
       </div>
-
-      <p className="text-xs text-muted-foreground">
-        These numbers receive an automatic SMS when a turnover clean is completed.
-      </p>
 
       {/* Add form */}
       {showForm && (
@@ -617,6 +646,7 @@ function CleaningReportRecipients({ listingId, isAdmin }: { listingId: number; i
 
       {/* Slack webhook */}
       {isAdmin && <SlackWebhookConfig listingId={listingId} />}
+      </>}
     </div>
   );
 }

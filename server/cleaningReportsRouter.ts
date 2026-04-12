@@ -55,6 +55,39 @@ export const cleaningReportsRouter = router({
       return { success: true };
     }),
 
+  /** Get cleaning reports config for a listing (enabled + slack) */
+  getConfig: protectedProcedure
+    .input(z.object({ listingId: z.number() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return { enabled: false, slackWebhookUrl: null };
+      const [row] = await db
+        .select({
+          enabled: listings.cleaningReportsEnabled,
+          slackWebhookUrl: listings.cleaningReportSlackWebhook,
+        })
+        .from(listings)
+        .where(eq(listings.id, input.listingId))
+        .limit(1);
+      return {
+        enabled: row?.enabled ?? false,
+        slackWebhookUrl: row?.slackWebhookUrl ?? null,
+      };
+    }),
+
+  /** Toggle cleaning reports on/off for a listing */
+  setEnabled: managerProcedure
+    .input(z.object({ listingId: z.number(), enabled: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+      await db
+        .update(listings)
+        .set({ cleaningReportsEnabled: input.enabled })
+        .where(eq(listings.id, input.listingId));
+      return { success: true };
+    }),
+
   /** Get the Slack webhook URL for a listing */
   getSlackWebhook: protectedProcedure
     .input(z.object({ listingId: z.number() }))

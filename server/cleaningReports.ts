@@ -81,6 +81,17 @@ async function sendCleaningReport(clean: {
     return;
   }
 
+  // Check if cleaning reports are enabled for this listing
+  const [listingConfig] = await db
+    .select({ enabled: listings.cleaningReportsEnabled })
+    .from(listings)
+    .where(eq(listings.id, clean.listingId))
+    .limit(1);
+
+  if (!listingConfig?.enabled) {
+    return; // silently skip — reports not enabled for this property
+  }
+
   // Check if already sent
   const existing = await db
     .select({ id: cleaningReportsSent.id })
