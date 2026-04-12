@@ -30,6 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Search,
   MapPin,
@@ -719,19 +720,155 @@ function SlackWebhookConfig({ listingId }: { listingId: number }) {
 }
 
 // ── Main Listings Page ─────────────────────────────────────────────────────
+function ListingCard({ listing, onClick }: { listing: any; onClick: () => void }) {
+  return (
+    <Card
+      className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
+      onClick={onClick}
+    >
+      {/* Image */}
+      <div className="w-full h-40 bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center">
+        {listing.photoUrl ? (
+          <img src={listing.photoUrl} alt={listing.name} className="w-full h-full object-cover" />
+        ) : (
+          <Building2 className="h-10 w-10 text-gray-400" />
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <h3 className="font-semibold text-sm line-clamp-2">
+            {listing.internalName || listing.name}
+          </h3>
+          <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-1 rounded whitespace-nowrap">
+            {listing.status}
+          </span>
+        </div>
+
+        {listing.internalName && (
+          <p className="text-xs text-muted-foreground mb-1 line-clamp-1">{listing.name}</p>
+        )}
+
+        <p className="text-xs text-muted-foreground mb-3">
+          {[listing.city, listing.state].filter(Boolean).join(", ") || "No location"}
+        </p>
+
+        <div className="flex items-center justify-between pt-3 border-t">
+          <div className="flex items-center gap-1">
+            <span className="text-sm font-semibold text-yellow-500">
+              {listing.avgRating || "—"}★
+            </span>
+            <span className="text-xs text-muted-foreground">
+              ({listing.reviewCount || 0})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {listing.podId && (
+              <Hexagon className="h-3.5 w-3.5 text-indigo-400" aria-label="Assigned to a pod" />
+            )}
+            <span className="text-xs text-muted-foreground">
+              {listing.guestCapacity || "—"} guests
+            </span>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ListingGrid({ listings, isLoading, onSelect }: { listings: any[]; isLoading: boolean; onSelect: (l: any) => void }) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {isLoading ? (
+        <>
+          <Skeleton className="h-64 rounded-lg" />
+          <Skeleton className="h-64 rounded-lg" />
+          <Skeleton className="h-64 rounded-lg" />
+        </>
+      ) : listings.length > 0 ? (
+        listings.map((listing) => (
+          <ListingCard key={listing.id} listing={listing} onClick={() => onSelect(listing)} />
+        ))
+      ) : (
+        <div className="col-span-full text-center py-12">
+          <p className="text-muted-foreground">No properties found</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AddManualListingForm({ onClose }: { onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [state, setState] = useState("");
+
+  const createMut = trpc.listings.createManual.useMutation({
+    onSuccess: () => {
+      utils.listings.list.invalidate();
+      onClose();
+      toast.success("Property added");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  return (
+    <div className="rounded-lg border p-4 bg-muted/30 space-y-3 max-w-lg">
+      <h3 className="text-sm font-semibold">Add 5STR Property</h3>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <Label className="text-xs">Property Name *</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Skyland" className="h-8 text-sm" />
+        </div>
+        <div className="col-span-2">
+          <Label className="text-xs">Address</Label>
+          <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St" className="h-8 text-sm" />
+        </div>
+        <div>
+          <Label className="text-xs">City</Label>
+          <Input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Asheville" className="h-8 text-sm" />
+        </div>
+        <div>
+          <Label className="text-xs">State</Label>
+          <Input value={state} onChange={(e) => setState(e.target.value)} placeholder="NC" className="h-8 text-sm" />
+        </div>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onClose}>Cancel</Button>
+        <Button size="sm" className="h-7 text-xs" disabled={!name.trim() || createMut.isPending}
+          onClick={() => createMut.mutate({ name: name.trim(), address: address.trim() || undefined, city: city.trim() || undefined, state: state.trim() || undefined })}>
+          {createMut.isPending ? "Adding..." : "Add Property"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function Listings() {
   const { data: listings, isLoading } = trpc.listings.list.useQuery();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedListing, setSelectedListing] = useState<ListingType | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
 
-  const filteredListings =
-    listings?.filter(
+  const hostawayListings = listings?.filter((l: any) => (l.source || "hostaway") === "hostaway") || [];
+  const manualListings = listings?.filter((l: any) => l.source === "manual") || [];
+
+  const filterBySearch = (list: any[]) =>
+    list.filter(
       (l) =>
         l.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (l.internalName || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
         l.city?.toLowerCase().includes(searchQuery.toLowerCase())
-    ) || [];
+    );
+
+  const selectListing = (listing: any) => {
+    setSelectedListing(listing as ListingType);
+    setDetailOpen(true);
+  };
 
   return (
     <div className="space-y-6 p-6 w-full min-w-0">
@@ -740,7 +877,7 @@ export default function Listings() {
         <div>
           <h1 className="wand-page-title">Listings</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {listings?.length || 0} properties synced from Hostaway — click any card to view vendors
+            {hostawayListings.length} Hostaway properties · {manualListings.length} 5STR-only
           </p>
         </div>
 
@@ -756,83 +893,26 @@ export default function Listings() {
         </div>
       </div>
 
-      {/* Property grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {isLoading ? (
-          <>
-            <Skeleton className="h-64 rounded-lg" />
-            <Skeleton className="h-64 rounded-lg" />
-            <Skeleton className="h-64 rounded-lg" />
-          </>
-        ) : filteredListings.length > 0 ? (
-          filteredListings.map((listing) => (
-            <Card
-              key={listing.id}
-              className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
-              onClick={() => {
-                setSelectedListing(listing as ListingType);
-                setDetailOpen(true);
-              }}
-            >
-              {/* Image */}
-              <div className="w-full h-40 bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center">
-                {listing.photoUrl ? (
-                  <img
-                    src={listing.photoUrl}
-                    alt={listing.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <Building2 className="h-10 w-10 text-gray-400" />
-                )}
-              </div>
+      <Tabs defaultValue="hostaway">
+        <TabsList>
+          <TabsTrigger value="hostaway">Hostaway ({hostawayListings.length})</TabsTrigger>
+          <TabsTrigger value="5str">5STR Only ({manualListings.length})</TabsTrigger>
+        </TabsList>
 
-              {/* Content */}
-              <div className="p-4">
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <h3 className="font-semibold text-sm line-clamp-2">
-                    {listing.internalName || listing.name}
-                  </h3>
-                  <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-1 rounded whitespace-nowrap">
-                    {listing.status}
-                  </span>
-                </div>
+        <TabsContent value="hostaway" className="mt-4">
+          <ListingGrid listings={filterBySearch(hostawayListings)} isLoading={isLoading} onSelect={selectListing} />
+        </TabsContent>
 
-                {listing.internalName && (
-                  <p className="text-xs text-muted-foreground mb-1 line-clamp-1">{listing.name}</p>
-                )}
-
-                <p className="text-xs text-muted-foreground mb-3">
-                  {listing.city}, {listing.state}
-                </p>
-
-                <div className="flex items-center justify-between pt-3 border-t">
-                  <div className="flex items-center gap-1">
-                    <span className="text-sm font-semibold text-yellow-500">
-                      {listing.avgRating || "—"}★
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      ({listing.reviewCount || 0})
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {listing.podId && (
-                      <Hexagon className="h-3.5 w-3.5 text-indigo-400" aria-label="Assigned to a pod" />
-                    )}
-                    <span className="text-xs text-muted-foreground">
-                      {listing.guestCapacity || "—"} guests
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          ))
-        ) : (
-          <div className="col-span-full text-center py-12">
-            <p className="text-muted-foreground">No properties found</p>
+        <TabsContent value="5str" className="mt-4 space-y-4">
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => setShowAddForm(!showAddForm)}>
+              <Plus className="h-3 w-3 mr-1" /> Add Property
+            </Button>
           </div>
-        )}
-      </div>
+          {showAddForm && <AddManualListingForm onClose={() => setShowAddForm(false)} />}
+          <ListingGrid listings={filterBySearch(manualListings)} isLoading={isLoading} onSelect={selectListing} />
+        </TabsContent>
+      </Tabs>
 
       {/* Property Detail Sheet */}
       <PropertyDetailSheet

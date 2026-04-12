@@ -255,6 +255,71 @@ export const appRouter = router({
             l.city?.toLowerCase().includes(q)
         );
       }),
+
+    /** Create a manual (5STR-only) listing not sourced from Hostaway */
+    createManual: managerProcedure
+      .input(
+        z.object({
+          name: z.string().min(1),
+          internalName: z.string().optional(),
+          address: z.string().optional(),
+          city: z.string().optional(),
+          state: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+        const { listings: listingsTable } = await import("../drizzle/schema");
+        const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        const hostawayId = `5str-${slug}-${Date.now()}`;
+        const [result] = await db.insert(listingsTable).values({
+          hostawayId,
+          name: input.name.trim(),
+          internalName: input.internalName?.trim() || null,
+          address: input.address?.trim() || null,
+          city: input.city?.trim() || null,
+          state: input.state?.trim() || null,
+          source: "manual",
+        });
+        return { id: result.insertId, hostawayId };
+      }),
+
+    /** Update a manual listing */
+    updateManual: managerProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          name: z.string().min(1).optional(),
+          internalName: z.string().optional(),
+          address: z.string().optional(),
+          city: z.string().optional(),
+          state: z.string().optional(),
+          status: z.enum(["active", "inactive", "archived"]).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+        const { listings: listingsTable } = await import("../drizzle/schema");
+        const { id, ...updates } = input;
+        // Only allow editing manual listings
+        const [existing] = await db
+          .select({ source: listingsTable.source })
+          .from(listingsTable)
+          .where(eq(listingsTable.id, id))
+          .limit(1);
+        if (existing?.source !== "manual") throw new Error("Can only edit manual listings");
+        const cleanUpdates: Record<string, any> = {};
+        if (updates.name) cleanUpdates.name = updates.name.trim();
+        if (updates.internalName !== undefined) cleanUpdates.internalName = updates.internalName?.trim() || null;
+        if (updates.address !== undefined) cleanUpdates.address = updates.address?.trim() || null;
+        if (updates.city !== undefined) cleanUpdates.city = updates.city?.trim() || null;
+        if (updates.state !== undefined) cleanUpdates.state = updates.state?.trim() || null;
+        if (updates.status) cleanUpdates.status = updates.status;
+        await db.update(listingsTable).set(cleanUpdates).where(eq(listingsTable.id, id));
+        return { success: true };
+      }),
   }),
 
   // Tasks

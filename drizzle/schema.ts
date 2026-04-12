@@ -43,6 +43,7 @@ export const listings = mysqlTable("listings", {
   state: varchar("state", { length: 64 }),
   country: varchar("country", { length: 64 }),
   guestCapacity: int("guestCapacity"),
+  source: mysqlEnum("source", ["hostaway", "manual"]).default("hostaway").notNull(),
   status: mysqlEnum("status", ["active", "inactive", "archived"])
     .default("active")
     .notNull(),
