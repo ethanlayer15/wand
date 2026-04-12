@@ -277,6 +277,11 @@ export async function runReviewDrafter(limit = 10): Promise<DraftResult> {
           hostawayReviewId: review.hostawayReviewId,
           listingId: review.listingId,
           draft,
+          // Context for display in Ops Inbox
+          guestName: review.guestName,
+          rating: review.rating,
+          reviewText: review.text,
+          source: review.source,
         },
         confidence: String(confidence),
         relatedListingId: review.listingId,

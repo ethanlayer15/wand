@@ -30,29 +30,44 @@ function ReviewReplyPreview({ action, editedDraft, onEditDraft }: {
   const draft = editedDraft ?? action?.draft ?? "";
 
   return (
-    <div className="space-y-2">
-      <div className="font-medium text-muted-foreground text-xs mb-1">Draft Reply</div>
-      {editing ? (
-        <div className="space-y-2">
-          <Textarea
-            value={draft}
-            onChange={(e) => onEditDraft(e.target.value)}
-            rows={5}
-            className="text-sm"
-          />
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(false)}>
-            Done editing
-          </Button>
-        </div>
-      ) : (
-        <div
-          className="whitespace-pre-wrap bg-muted/50 rounded p-3 text-sm cursor-pointer hover:bg-muted/70 transition-colors relative group"
-          onClick={() => setEditing(true)}
-        >
-          {draft}
-          <Pencil className="h-3 w-3 absolute top-2 right-2 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+    <div className="space-y-3">
+      {/* Original review */}
+      {action?.reviewText && (
+        <div>
+          <div className="font-medium text-muted-foreground text-xs mb-1">
+            Guest Review — {action.guestName || "Guest"} ({action.rating || "?"}★ on {action.source || "Airbnb"})
+          </div>
+          <div className="whitespace-pre-wrap bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50 rounded p-3 text-sm italic text-muted-foreground">
+            "{action.reviewText}"
+          </div>
         </div>
       )}
+
+      {/* Draft reply */}
+      <div>
+        <div className="font-medium text-muted-foreground text-xs mb-1">Draft Reply</div>
+        {editing ? (
+          <div className="space-y-2">
+            <Textarea
+              value={draft}
+              onChange={(e) => onEditDraft(e.target.value)}
+              rows={5}
+              className="text-sm"
+            />
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(false)}>
+              Done editing
+            </Button>
+          </div>
+        ) : (
+          <div
+            className="whitespace-pre-wrap bg-muted/50 rounded p-3 text-sm cursor-pointer hover:bg-muted/70 transition-colors relative group"
+            onClick={() => setEditing(true)}
+          >
+            {draft}
+            <Pencil className="h-3 w-3 absolute top-2 right-2 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
