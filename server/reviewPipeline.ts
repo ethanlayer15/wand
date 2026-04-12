@@ -18,7 +18,6 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { reviews, tasks, listings } from "../drizzle/schema";
 import type { Review, InsertTask } from "../drizzle/schema";
 import { getHostawayClient } from "./hostaway";
-import { invokeLLM } from "./_core/llm";
 import { ENV } from "./_core/env";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -60,10 +59,9 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
     .from(listings);
   const listingMap = new Map(listingRows.map((l) => [l.hostawayId, l.id]));
 
+  let updated = 0;
   for (const review of allReviews) {
     const reviewIdStr = String(review.id);
-    if (existingIds.has(reviewIdStr)) continue;
-
     // Only sync published guest reviews
     // 1. Must be published (skip drafts, pending, etc.)
     if (review.status && review.status !== "published") continue;
@@ -110,36 +108,74 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
       cleanlinessRating = Number(review.subRatings.cleanliness);
     }
 
+    // Extract host response from Hostaway payload. Hostaway exposes this in
+    // a few possible shapes depending on channel — check all of them.
+    const hostResponseText: string | null =
+      (typeof review.hostReview === "string" && review.hostReview.trim()) ||
+      (typeof review.hostResponse === "string" && review.hostResponse.trim()) ||
+      (typeof review.reply === "string" && review.reply.trim()) ||
+      null;
+    const hostResponseAt: Date | null = review.hostReviewAt
+      ? new Date(review.hostReviewAt)
+      : review.hostResponseAt
+        ? new Date(review.hostResponseAt)
+        : null;
+
     try {
-      await db.insert(reviews).values({
-        hostawayReviewId: reviewIdStr,
-        listingId: localListingId,
-        hostawayReservationId: review.reservationId ? String(review.reservationId) : null,
-        rating: review.rating || null,
-        cleanlinessRating,
-        text: review.publicReview || null,
-        privateFeedback: review.privateFeedback || null,
-        guestName: review.guestName || review.reviewerName || null,
-        source,
-        reviewStatus: review.status || null,
-        reviewType: review.type || "guest-to-host",
-        submittedAt: review.submittedAt ? new Date(review.submittedAt) : null,
-        arrivalDate: review.arrivalDate ? new Date(review.arrivalDate) : null,
-        departureDate: review.departureDate ? new Date(review.departureDate) : null,
-        channelId: review.channelId || null,
-        isAnalyzed: false,
-        aiActionable: false,
-      });
-      synced++;
+      const isExisting = existingIds.has(reviewIdStr);
+
+      // UPSERT — we need to pick up host-response changes on every sync,
+      // not just on first insert. `isAnalyzed`/aiActionable/host-response-draft
+      // fields are ONLY set on initial insert; re-syncs never clobber them.
+      await db
+        .insert(reviews)
+        .values({
+          hostawayReviewId: reviewIdStr,
+          listingId: localListingId,
+          hostawayReservationId: review.reservationId ? String(review.reservationId) : null,
+          rating: review.rating || null,
+          cleanlinessRating,
+          text: review.publicReview || null,
+          privateFeedback: review.privateFeedback || null,
+          guestName: review.guestName || review.reviewerName || null,
+          source,
+          reviewStatus: review.status || null,
+          reviewType: review.type || "guest-to-host",
+          submittedAt: review.submittedAt ? new Date(review.submittedAt) : null,
+          arrivalDate: review.arrivalDate ? new Date(review.arrivalDate) : null,
+          departureDate: review.departureDate ? new Date(review.departureDate) : null,
+          channelId: review.channelId || null,
+          hostResponse: hostResponseText,
+          hostResponseSubmittedAt: hostResponseAt,
+          hostResponseStatus: hostResponseText ? "submitted" : "none",
+          isAnalyzed: false,
+          aiActionable: false,
+        })
+        .onDuplicateKeyUpdate({
+          set: {
+            // Re-sync updatable Hostaway-owned fields. We intentionally skip
+            // isAnalyzed / aiActionable / hostResponseDraft / hostResponseStatus
+            // so re-syncs don't wipe our internal state.
+            rating: review.rating || null,
+            cleanlinessRating,
+            text: review.publicReview || null,
+            privateFeedback: review.privateFeedback || null,
+            guestName: review.guestName || review.reviewerName || null,
+            reviewStatus: review.status || null,
+            hostResponse: hostResponseText,
+            hostResponseSubmittedAt: hostResponseAt,
+          },
+        });
+      if (isExisting) updated++;
+      else synced++;
     } catch (err: any) {
-      // Duplicate key errors are expected for concurrent syncs
-      if (!err.message?.includes("Duplicate entry")) {
-        console.error(`[ReviewPipeline] Failed to insert review ${review.id}:`, err.message);
-      }
+      console.error(`[ReviewPipeline] Failed to upsert review ${review.id}:`, err.message);
     }
   }
 
-  console.log(`[ReviewPipeline] Synced ${synced} new reviews (${allReviews.length} total from Hostaway)`);
+  console.log(
+    `[ReviewPipeline] Synced ${synced} new, ${updated} updated (${allReviews.length} total from Hostaway)`
+  );
   return { synced, total: allReviews.length };
 }
 
@@ -231,7 +267,16 @@ export async function markOldReviewsAsAnalyzed(): Promise<{ marked: number }> {
 }
 
 // ── Step 2: AI Analysis ────────────────────────────────────────────────
+//
+// The real work lives in `./reviewAnalyzer.ts` now — a single LLM call that
+// produces BOTH the task-routing verdict AND the sentiment/category/highlights
+// schema, and writes to BOTH reviews.ai* and reviewAnalysis in one shot.
+// `analyzeReviewsForTasks` below is kept as a thin wrapper so runReviewPipeline
+// and the existing tests don't need to change.
 
+// ── Legacy prompt (kept only for the optional private test harness) ────
+// Left verbatim so `server/reviewPipelineAndColumns.test.ts` and any
+// downstream imports still resolve. Not used by runReviewPipeline anymore.
 const REVIEW_TASK_ANALYSIS_PROMPT = `You are an AI analyst for a vacation rental property management company called Wand. Analyze the following guest review and determine if it contains actionable items that should become maintenance/improvement tasks.
 
 PUBLIC REVIEW:
@@ -273,141 +318,21 @@ Rules:
 - taskPriority: high = safety/health/major malfunction, medium = comfort/cleanliness, low = nice-to-have improvement
 - Be conservative: when in doubt, set confidence to "low" rather than "high"`;
 
+/**
+ * Run the unified review analyzer on any un-analyzed 2026+ reviews.
+ *
+ * This is now a thin wrapper around `reviewAnalyzer.analyzeUnanalyzedReviewsUnified`
+ * — it exists for backwards compatibility with the pipeline orchestrator
+ * below and any tests that import `analyzeReviewsForTasks`.
+ */
 export async function analyzeReviewsForTasks(batchSize = 500): Promise<{
   analyzed: number;
   actionable: number;
   errors: number;
 }> {
-  const db = await getDb();
-  if (!db) return { analyzed: 0, actionable: 0, errors: 0 };
-
-  // Get unanalyzed reviews from 2026 onward only
-  const unanalyzed = await db
-    .select()
-    .from(reviews)
-    .where(
-      and(
-        eq(reviews.isAnalyzed, false),
-        gte(reviews.submittedAt, ANALYSIS_CUTOFF_DATE)
-      )
-    )
-    .limit(batchSize);
-
-  console.log(`[ReviewPipeline] Found ${unanalyzed.length} unanalyzed 2026+ reviews (batch limit: ${batchSize})`);
-
-  let analyzed = 0;
-  let actionableCount = 0;
-  let errors = 0;
-
-  // Get listing names for context
-  const listingRows = await db
-    .select({ id: listings.id, name: listings.name })
-    .from(listings);
-  const listingNameMap = new Map(listingRows.map((l) => [l.id, l.name]));
-
-  for (const review of unanalyzed) {
-    const publicText = review.text || "";
-    const privateText = review.privateFeedback || "";
-
-    // Skip reviews with no text content at all
-    if (!publicText.trim() && !privateText.trim()) {
-      await db
-        .update(reviews)
-        .set({
-          isAnalyzed: true,
-          aiActionable: false,
-          aiConfidence: "low",
-          aiSummary: "No review text available",
-          aiIssues: [],
-        })
-        .where(eq(reviews.id, review.id));
-      analyzed++;
-      continue;
-    }
-
-    try {
-      const propertyName = listingNameMap.get(review.listingId) || `Property #${review.listingId}`;
-      const prompt = REVIEW_TASK_ANALYSIS_PROMPT
-        .replace("{publicReview}", publicText.slice(0, 2000))
-        .replace("{privateFeedback}", privateText.slice(0, 2000))
-        .replace("{guestName}", review.guestName || "Unknown")
-        .replace("{rating}", String(review.rating || "N/A"))
-        .replace("{propertyName}", propertyName);
-
-      const response = await invokeLLM({
-        messages: [
-          { role: "system", content: "You are a precise JSON-only analyst. Return only valid JSON, no markdown." },
-          { role: "user", content: prompt },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "review_task_analysis",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                actionable: { type: "boolean" },
-                confidence: { type: "string" },
-                summary: { type: "string" },
-                issues: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      type: { type: "string" },
-                      description: { type: "string" },
-                      severity: { type: "string" },
-                      quote: { type: "string" },
-                      confidence: { type: "string" },
-                    },
-                    required: ["type", "description", "severity", "quote", "confidence"],
-                    additionalProperties: false,
-                  },
-                },
-                taskTitle: { type: ["string", "null"] },
-                taskCategory: { type: "string" },
-                taskPriority: { type: "string" },
-              },
-              required: ["actionable", "confidence", "summary", "issues", "taskTitle", "taskCategory", "taskPriority"],
-              additionalProperties: false,
-            },
-          },
-        },
-      });
-
-      const content = response.choices?.[0]?.message?.content as string | undefined;
-      if (!content) {
-        errors++;
-        continue;
-      }
-
-      const result = JSON.parse(content);
-
-      await db
-        .update(reviews)
-        .set({
-          isAnalyzed: true,
-          aiActionable: result.actionable === true,
-          aiConfidence: result.confidence || "low",
-          aiSummary: result.summary || null,
-          aiIssues: result.issues || [],
-        })
-        .where(eq(reviews.id, review.id));
-
-      if (result.actionable) actionableCount++;
-      analyzed++;
-    } catch (err: any) {
-      console.error(`[ReviewPipeline] Failed to analyze review ${review.id}:`, err.message);
-      errors++;
-    }
-
-    // Small delay to avoid rate limiting
-    await new Promise((r) => setTimeout(r, 200));
-  }
-
-  console.log(`[ReviewPipeline] Analyzed ${analyzed} reviews, ${actionableCount} actionable, ${errors} errors`);
-  return { analyzed, actionable: actionableCount, errors };
+  // Lazy import to avoid circular dependency on ANALYSIS_CUTOFF_DATE
+  const { analyzeUnanalyzedReviewsUnified } = await import("./reviewAnalyzer");
+  return analyzeUnanalyzedReviewsUnified(batchSize);
 }
 
 // ── Step 3: Create Tasks from Actionable Reviews ───────────────────────
@@ -636,7 +561,7 @@ export async function runReviewPipeline(): Promise<{
   let tasksCreated = 0;
   let oldMarked = 0;
 
-  // Step 1: Sync reviews from Hostaway
+  // Step 1: Sync reviews from Hostaway (upsert — updates host-response too)
   reviewPipelineJob.phase = "syncing";
   try {
     const syncResult = await syncHostawayReviews();
@@ -645,6 +570,20 @@ export async function runReviewPipeline(): Promise<{
     console.log(`[ReviewPipeline] Synced ${synced} reviews`);
   } catch (err: any) {
     console.error("[ReviewPipeline] Review sync failed:", err.message);
+  }
+
+  // Step 1a: Backfill any reviews where we have the Hostaway payload cached
+  // but cleanlinessRating is still null (only touches rows where it's null —
+  // safe to run on every pipeline invocation).
+  try {
+    const backfillResult = await backfillCleanlinessRatings();
+    if (backfillResult.updated > 0) {
+      console.log(
+        `[ReviewPipeline] Backfilled cleanliness on ${backfillResult.updated} reviews`
+      );
+    }
+  } catch (err: any) {
+    console.error("[ReviewPipeline] Cleanliness backfill failed:", err.message);
   }
 
   // Step 1b: Mark pre-2026 reviews as analyzed (skip AI)

@@ -1,93 +1,40 @@
 /**
  * AI Analysis Engine for reviews and guest messages.
- * Uses LLM to detect issues, categorize sentiment, and extract actionable insights.
+ *
+ * NOTE: Review analysis used to live in this file with its own LLM prompt.
+ * It has been consolidated into `server/reviewAnalyzer.ts` (single LLM call,
+ * produces union schema, writes to BOTH reviews.ai* and reviewAnalysis).
+ *
+ * The review-facing functions below are kept as thin wrappers so every
+ * historical caller (Analyze page mutations, background jobs, Dashboard
+ * metrics) keeps working without changes. New code should import directly
+ * from `./reviewAnalyzer`.
  */
 import { invokeLLM } from "./_core/llm";
 import {
-  getReviewById,
-  upsertReviewAnalysis,
   getUnanalyzedGuestMessages,
   updateGuestMessageAnalysis,
   getUnanalyzedReviewIds,
   countUnanalyzedReviews,
 } from "./db";
+import { analyzeReviewByIdUnified } from "./reviewAnalyzer";
 
-// ── Review Analysis ──────────────────────────────────────────────────
+// ── Review Analysis (delegates to reviewAnalyzer) ────────────────────
 
-const REVIEW_ANALYSIS_PROMPT = `You are an AI analyst for a vacation rental property management company. Analyze the following guest review and extract structured insights.
-
-Review Text: "{reviewText}"
-Rating: {rating}/10
-Property: {propertyName}
-
-Respond with a JSON object matching this exact schema:
-{
-  "categories": ["cleaning", "maintenance", "amenities", "location", "communication", "value", "experience"],
-  "sentimentScore": <number from -100 to 100>,
-  "issues": [
-    {
-      "type": "<cleaning|maintenance|safety|noise|amenity|pest|temperature|other>",
-      "description": "<brief description of the issue>",
-      "severity": "<low|medium|high|critical>",
-      "quote": "<exact text from the review>"
-    }
-  ],
-  "highlights": ["<positive aspects mentioned>"],
-  "cleanerMentioned": "<name if a cleaner/housekeeper is mentioned, otherwise null>",
-  "summary": "<one-sentence summary of the review>"
-}
-
-Rules:
-- Only include categories that are actually discussed in the review
-- sentimentScore: -100 = extremely negative, 0 = neutral, 100 = extremely positive
-- Only include issues if there are actual problems mentioned
-- highlights should capture specific positive mentions
-- cleanerMentioned should be null if no specific cleaner/housekeeper name is mentioned
-- Be precise with quotes — use exact text from the review`;
-
+/**
+ * Analyze a single review. Thin wrapper around the unified analyzer —
+ * kept on this module path so the Analyze page's per-review re-run button
+ * and the dashboard metrics code keep importing `analyzeReview` like they
+ * used to.
+ */
 export async function analyzeReview(reviewId: number): Promise<boolean> {
-  const review = await getReviewById(reviewId);
-  if (!review || !review.text) return false;
-
-  try {
-    const prompt = REVIEW_ANALYSIS_PROMPT
-      .replace("{reviewText}", review.text)
-      .replace("{rating}", String(review.rating || 0))
-      .replace("{propertyName}", "Property #" + review.listingId);
-
-    const response = await invokeLLM({
-      messages: [
-        { role: "system", content: "You are a precise JSON-only analyst. Return only valid JSON, no markdown." },
-        { role: "user", content: prompt },
-      ],
-      response_format: { type: "json_object" },
-    });
-
-    const content = response.choices?.[0]?.message?.content as string | undefined;
-    if (!content) return false;
-
-    const analysis = JSON.parse(content);
-
-    await upsertReviewAnalysis({
-      reviewId: review.id,
-      listingId: review.listingId,
-      categories: analysis.categories,
-      sentimentScore: analysis.sentimentScore,
-      issues: analysis.issues,
-      highlights: analysis.highlights,
-      cleanerMentioned: analysis.cleanerMentioned || null,
-      summary: analysis.summary,
-    });
-
-    return true;
-  } catch (err: any) {
-    console.error(`[AI] Failed to analyze review ${reviewId}:`, err?.message || err);
-    return false;
-  }
+  return analyzeReviewByIdUnified(reviewId);
 }
 
 /**
- * Batch analyze unanalyzed reviews (small batch, synchronous)
+ * Batch analyze unanalyzed reviews (small batch, synchronous). Used by the
+ * "Analyze Reviews" button in the Analyze page and by the background job
+ * system below. Returns the legacy `{ analyzed, errors, remaining }` shape.
  */
 export async function analyzeUnanalyzedReviews(batchSize = 20): Promise<{
   analyzed: number;

@@ -38,7 +38,12 @@ import { ENV } from "./_core/env";
 import { sendSlackNotification, checkAndNotifyUnassignedSdts } from "./sdtNotifier";
 import { updateIntegrationStatus } from "./db";
 import { pushTaskToBreezeway, startGuestMessagePipelineJob, getPipelineJobStatus } from "./taskCreator";
-import { startReviewPipelineJob, getReviewPipelineJobStatus } from "./reviewPipeline";
+import {
+  startReviewPipelineJob,
+  getReviewPipelineJobStatus,
+  backfillCleanlinessRatings,
+} from "./reviewPipeline";
+import { resetAnalysisState } from "./reviewAnalyzer";
 import { activateBreezewayTaskSync, deactivateBreezewayTaskSync, pollBreezewayTasks, closeBreezewayTask, reopenBreezewayTask } from "./breezewayTaskSync";
 import { getBreezewaySyncConfig, getTaskByBreezewayId } from "./db";
 import { updateTaskStatus, updateTaskAssignee, updateTaskTitle, getTeamMembersForAssignment, getTaskDetail, listTeamMembers, listInvitations, createInvitation, revokeInvitation, changeUserRole, removeTeamMember, getUserByEmail, toggleTaskUrgent, createTask, getUrgentTasks, reopenAutoResolvedTask, confirmResolution, addTaskComment, addTaskAttachment, getTaskAttachments, deleteTaskAttachment } from "./db";
@@ -476,6 +481,44 @@ export const appRouter = router({
     flagged: managerProcedure.query(async () => {
       return getFlaggedReviews();
     }),
+
+    // Save a draft host response on a review. Does NOT publish anything to
+    // Hostaway — just stores the draft so the UI or the Wanda agent can
+    // edit it before Phase 2 wires up publishing.
+    saveHostResponseDraft: managerProcedure
+      .input(z.object({
+        reviewId: z.number(),
+        draft: z.string().max(5000),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const { reviews: reviewsTable } = await import("../drizzle/schema");
+        await db
+          .update(reviewsTable)
+          .set({
+            hostResponseDraft: input.draft,
+            hostResponseStatus: "draft",
+            hostResponseError: null,
+          })
+          .where(eq(reviewsTable.id, input.reviewId));
+        return { ok: true };
+      }),
+
+    // Publish a draft host response to Hostaway. Phase 2 stub — will call
+    // the Hostaway review-reply API once the endpoint is confirmed and
+    // exercised against each channel (Airbnb/VRBO/Booking have different
+    // rules). Today it deliberately throws so callers don't silently
+    // think a reply was posted.
+    submitHostResponse: managerProcedure
+      .input(z.object({ reviewId: z.number() }))
+      .mutation(async () => {
+        throw new TRPCError({
+          code: "NOT_IMPLEMENTED",
+          message:
+            "submitHostResponse is a Phase 2 feature — the draft is saved but not yet published to Hostaway. Ping the Wand team to enable this.",
+        });
+      }),
   }),
 
   // Integrations (admin only)
@@ -505,6 +548,19 @@ export const appRouter = router({
     // Sync only Hostaway reviews
     syncHostawayReviews: adminProcedure.mutation(async () => {
       return syncHostawayReviews();
+    }),
+
+    // Re-fetch Hostaway review payloads and populate cleanlinessRating for
+    // rows where it's still NULL. Safe to run multiple times.
+    backfillReviewCleanliness: adminProcedure.mutation(async () => {
+      return backfillCleanlinessRatings();
+    }),
+
+    // Clear isAnalyzed on all 2026+ reviews so the next pipeline run
+    // re-analyzes them with the current (unified) analyzer. Useful after
+    // a prompt / schema change.
+    reanalyzeAllReviews: adminProcedure.mutation(async () => {
+      return resetAnalysisState();
     }),
 
     // Sync only Breezeway properties

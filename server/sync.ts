@@ -158,10 +158,12 @@ export async function syncHostawayListings(): Promise<{ synced: number; errors: 
 
 // ── Hostaway Reviews ────────────────────────────────────────────────
 
-export async function syncHostawayReviews(): Promise<{ synced: number; errors: number }> {
-  console.warn("[Sync] syncHostawayReviews is a stub — re-export from Manus");
-  return { synced: 0, errors: 0 };
-}
+// NOTE: The real review sync lives in `./reviewPipeline.ts`. We re-export
+// it here so callers that historically imported from `./sync` (runFullSync,
+// routers.ts admin mutation, etc.) keep working without touching imports.
+// The previous stub silently returned 0/0 and broke the whole review
+// pipeline; do not reintroduce it.
+export { syncHostawayReviews } from "./reviewPipeline";
 
 // ── Breezeway Properties ────────────────────────────────────────────
 
@@ -420,7 +422,7 @@ export async function listBreezewayWebhooks(): Promise<any[]> {
 
 export async function runFullSync(): Promise<{
   listings: { synced: number; errors: number };
-  reviews: { synced: number; errors: number };
+  reviews: { synced: number; total: number };
   properties: { synced: number; errors: number };
   team: { synced: number; errors: number };
 }> {
