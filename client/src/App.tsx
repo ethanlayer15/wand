@@ -18,6 +18,7 @@ import Login from "@/pages/Login";
 import TeamManagement from "@/pages/TeamManagement";
 import NotFound from "@/pages/NotFound";
 import CleanerDashboard from "@/pages/CleanerDashboard";
+import OpsInbox from "@/pages/OpsInbox";
 import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -127,6 +128,9 @@ function Router() {
               </Route>
               <Route path="/pods">
                 <RequireRole minRole="manager"><Pods /></RequireRole>
+              </Route>
+              <Route path="/ops-inbox">
+                <OpsInbox />
               </Route>
               <Route path="/settings">
                 <RequireRole minRole="admin"><Settings /></RequireRole>

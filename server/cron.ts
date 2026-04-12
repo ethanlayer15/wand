@@ -18,6 +18,7 @@ import { pollBreezewayTasks } from "./breezewayTaskSync";
 import { syncCompletedCleans } from "./breezewayCleanSync";
 import { getBreezewaySyncConfig } from "./db";
 import { sendAllWeeklyPayReports, sendReceiptReminders } from "./emailReports";
+import { runReviewDrafter } from "./agent/reviewDrafter";
 import { syncBreezewayTeam, syncHostawayListings } from "./sync";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -248,6 +249,16 @@ export function startCronJobs(): void {
 
   // 5. Review pipeline — 5× daily on same schedule as guest messages
   scheduleAtHours("Review Pipeline", [7, 11, 14, 17, 20], runReviewPipeline);
+
+  // 6. Review Reply Drafter — 2× daily after review pipeline
+  scheduleAtHours("Review Drafter", [9, 15], async () => {
+    try {
+      const result = await runReviewDrafter(10);
+      console.log(`[Cron] Review Drafter: ${result.drafted} drafted, ${result.skipped} skipped, ${result.errors} errors`);
+    } catch (err: any) {
+      console.error("[Cron] Review Drafter failed:", err.message);
+    }
+  });
 
   // 4. Breezeway task sync — every 15 minutes (reduced from 5 min to avoid rate limiting)
   const syncTimer = setInterval(() => {

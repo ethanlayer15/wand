@@ -34,6 +34,7 @@ import { compensationRouter } from "./compensationRouter";
 import { podRouter } from "./podRouter";
 import { cleanerDashboardRouter } from "./cleanerDashboardRouter";
 import { cleaningReportsRouter } from "./cleaningReportsRouter";
+import { agentRouter } from "./agentRouter";
 import { ENV } from "./_core/env";
 import { sendSlackNotification, checkAndNotifyUnassignedSdts } from "./sdtNotifier";
 import { updateIntegrationStatus } from "./db";
@@ -59,6 +60,7 @@ export const appRouter = router({
   pods: podRouter,
   cleanerDashboard: cleanerDashboardRouter,
   cleaningReports: cleaningReportsRouter,
+  agent: agentRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {

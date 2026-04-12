@@ -896,3 +896,113 @@ export const cleaningReportsSent = mysqlTable("cleaningReportsSent", {
 
 export type CleaningReportSent = typeof cleaningReportsSent.$inferSelect;
 export type InsertCleaningReportSent = typeof cleaningReportsSent.$inferInsert;
+
+// ── Wand AI Agents (Phase 1 foundation) ─────────────────────────────
+
+/**
+ * Agent Suggestions — the universal human-in-loop queue.
+ *
+ * Every agent (Task Triage, Review Drafter, Performance Coach, Schedule
+ * Optimizer, Pay Report QA, etc.) writes its proposed actions here. The
+ * Ops Inbox UI renders them grouped by agent/kind and lets ops approve,
+ * edit, dismiss, or snooze.
+ *
+ * `proposedAction` is an opaque JSON payload that the corresponding
+ * executor reads when the suggestion is approved (e.g. a draft review
+ * reply, a task reassignment, a vendor dispatch message).
+ */
+export const agentSuggestions = mysqlTable("agentSuggestions", {
+  id: int("id").autoincrement().primaryKey(),
+  agentName: varchar("agentName", { length: 64 }).notNull(), // e.g. "review_drafter", "task_triage", "schedule_optimizer"
+  kind: varchar("kind", { length: 64 }).notNull(), // e.g. "review_reply", "task_reassign", "coaching_draft"
+  title: text("title").notNull(), // short human-readable headline
+  summary: text("summary"), // short description shown in the list view
+  reasoning: text("reasoning"), // Claude's chain-of-thought / why it's suggesting this
+  proposedAction: json("proposedAction"), // opaque payload for the executor
+  confidence: decimal("confidence", { precision: 3, scale: 2 }), // 0.00-1.00
+  status: mysqlEnum("agentSuggestionStatus", [
+    "pending",
+    "approved",
+    "dismissed",
+    "edited",
+    "snoozed",
+    "executed",
+    "failed",
+  ]).default("pending").notNull(),
+  // Related entities (nullable — not every suggestion targets all of these)
+  relatedListingId: int("relatedListingId"),
+  relatedCleanerId: int("relatedCleanerId"),
+  relatedTaskId: int("relatedTaskId"),
+  relatedReviewId: int("relatedReviewId"),
+  relatedPodId: int("relatedPodId"),
+  // Review/execution metadata
+  reviewedBy: int("reviewedBy"), // FK → users.id
+  reviewedAt: timestamp("reviewedAt"),
+  reviewNotes: text("reviewNotes"),
+  executedAt: timestamp("executedAt"),
+  executionResult: text("executionResult"),
+  snoozedUntil: timestamp("snoozedUntil"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AgentSuggestion = typeof agentSuggestions.$inferSelect;
+export type InsertAgentSuggestion = typeof agentSuggestions.$inferInsert;
+
+/**
+ * Agent Actions Audit Log — the full trail of every tool call Claude makes.
+ *
+ * Required for graduating individual agent workflows from "suggest" mode to
+ * autonomous mode later: we can ask "of all the suggestions this agent
+ * produced last month, how often did ops approve without edits?" and use
+ * that to decide whether to auto-execute.
+ */
+export const agentActions = mysqlTable("agentActions", {
+  id: int("id").autoincrement().primaryKey(),
+  agentName: varchar("agentName", { length: 64 }).notNull(),
+  runId: varchar("runId", { length: 64 }), // groups multiple tool calls from one agent run
+  toolName: varchar("toolName", { length: 128 }).notNull(),
+  input: json("input"), // tool call args
+  output: json("output"), // tool result (may be truncated)
+  success: boolean("success").default(true).notNull(),
+  errorMessage: text("errorMessage"),
+  durationMs: int("durationMs"),
+  // Who triggered the run — either a user (for interactive chat) or a cron job
+  userId: int("userId"), // FK → users.id, nullable for cron-triggered runs
+  triggeredBy: varchar("triggeredBy", { length: 64 }), // "chat", "cron", "webhook"
+  suggestionId: int("suggestionId"), // optional link to the suggestion this action produced
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AgentAction = typeof agentActions.$inferSelect;
+export type InsertAgentAction = typeof agentActions.$inferInsert;
+
+/**
+ * Property Playbooks — Claude-maintained knowledge document per listing.
+ *
+ * Updated in the background (Phase 3) from reviews, tasks, guest messages,
+ * and manual ops notes. Injected as context into every agent run that
+ * touches a listing. This is the single most valuable context document
+ * in the system — it's what a new ops hire would read, except it's
+ * maintained automatically.
+ */
+export const propertyPlaybooks = mysqlTable("propertyPlaybooks", {
+  id: int("id").autoincrement().primaryKey(),
+  listingId: int("listingId").notNull().unique(), // FK → listings.id
+  // Structured fields so UI can render sections
+  quirks: json("quirks").$type<Array<{ note: string; source?: string; addedAt?: string }>>(),
+  frequentIssues: json("frequentIssues").$type<Array<{ issue: string; count: number; lastSeen?: string }>>(),
+  preferredVendors: json("preferredVendors").$type<Array<{ vendorId?: number; name: string; specialty: string; reason?: string }>>(),
+  guestFeedbackThemes: json("guestFeedbackThemes").$type<Array<{ theme: string; sentiment: "positive" | "negative"; count: number }>>(),
+  // Freeform ops-written notes (never overwritten by the agent)
+  manualNotes: text("manualNotes"),
+  // Agent-written freeform summary
+  agentSummary: text("agentSummary"),
+  lastAgentUpdateAt: timestamp("lastAgentUpdateAt"),
+  lastManualUpdateAt: timestamp("lastManualUpdateAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type PropertyPlaybook = typeof propertyPlaybooks.$inferSelect;
+export type InsertPropertyPlaybook = typeof propertyPlaybooks.$inferInsert;

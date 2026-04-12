@@ -39,6 +39,7 @@ import {
   Users,
   UsersRound,
   Wrench,
+  Inbox,
 } from "lucide-react";
 
 // Conductor's wand with AI sparkle — LeisrStays brand mark for Wand
@@ -140,6 +141,12 @@ export const mainNavItems: NavItem[] = [
     icon: Hexagon,
     label: "Pods",
     path: "/pods",
+    minRole: "manager",
+  },
+  {
+    icon: Inbox,
+    label: "Ops Inbox",
+    path: "/ops-inbox",
     minRole: "manager",
   },
 ];

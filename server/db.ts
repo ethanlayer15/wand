@@ -94,6 +94,80 @@ export async function getDb() {
       } catch (e: any) {
         console.warn("[Database] Cleaning report tables migration:", e.message);
       }
+
+      // ── Wand AI Agents (Phase 1) ─────────────────────────────────────
+      try {
+        await _pool.promise().query(`
+          CREATE TABLE IF NOT EXISTS agentSuggestions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            agentName VARCHAR(64) NOT NULL,
+            kind VARCHAR(64) NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT,
+            reasoning TEXT,
+            proposedAction JSON,
+            confidence DECIMAL(3,2),
+            agentSuggestionStatus ENUM('pending','approved','dismissed','edited','snoozed','executed','failed') NOT NULL DEFAULT 'pending',
+            relatedListingId INT,
+            relatedCleanerId INT,
+            relatedTaskId INT,
+            relatedReviewId INT,
+            relatedPodId INT,
+            reviewedBy INT,
+            reviewedAt TIMESTAMP NULL,
+            reviewNotes TEXT,
+            executedAt TIMESTAMP NULL,
+            executionResult TEXT,
+            snoozedUntil TIMESTAMP NULL,
+            createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_agent_suggestions_status (agentSuggestionStatus),
+            INDEX idx_agent_suggestions_agent (agentName),
+            INDEX idx_agent_suggestions_listing (relatedListingId),
+            INDEX idx_agent_suggestions_created (createdAt)
+          )
+        `);
+        await _pool.promise().query(`
+          CREATE TABLE IF NOT EXISTS agentActions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            agentName VARCHAR(64) NOT NULL,
+            runId VARCHAR(64),
+            toolName VARCHAR(128) NOT NULL,
+            input JSON,
+            output JSON,
+            success BOOLEAN NOT NULL DEFAULT TRUE,
+            errorMessage TEXT,
+            durationMs INT,
+            userId INT,
+            triggeredBy VARCHAR(64),
+            suggestionId INT,
+            createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_agent_actions_run (runId),
+            INDEX idx_agent_actions_agent (agentName),
+            INDEX idx_agent_actions_tool (toolName),
+            INDEX idx_agent_actions_created (createdAt)
+          )
+        `);
+        await _pool.promise().query(`
+          CREATE TABLE IF NOT EXISTS propertyPlaybooks (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            listingId INT NOT NULL UNIQUE,
+            quirks JSON,
+            frequentIssues JSON,
+            preferredVendors JSON,
+            guestFeedbackThemes JSON,
+            manualNotes TEXT,
+            agentSummary TEXT,
+            lastAgentUpdateAt TIMESTAMP NULL,
+            lastManualUpdateAt TIMESTAMP NULL,
+            createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+          )
+        `);
+        console.log("[Database] Wand Agent tables ensured");
+      } catch (e: any) {
+        console.warn("[Database] Agent tables migration:", e.message);
+      }
     } catch (error) {
       console.warn("[Database] Failed to create pool:", error);
       _db = null;
