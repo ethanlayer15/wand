@@ -470,6 +470,14 @@ export const appRouter = router({
       return getUrgentTasks();
     }),
 
+    // Duplicate detection: find tasks similar to a given task
+    duplicates: protectedProcedure
+      .input(z.object({ taskId: z.number() }))
+      .query(async ({ input }) => {
+        const { findDuplicateTasks } = await import("./duplicateDetection");
+        return findDuplicateTasks(input.taskId);
+      }),
+
     addComment: protectedProcedure
       .input(z.object({
         taskId: z.number(),

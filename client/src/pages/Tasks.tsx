@@ -711,6 +711,12 @@ function TaskDetailSheet({
     { enabled: open && isBreezewayTask && !isNaN(breezewayTaskIdNum) && breezewayTaskIdNum > 0 }
   );
 
+  // Duplicate detection
+  const { data: duplicates } = trpc.tasks.duplicates.useQuery(
+    { taskId: task?.id ?? 0 },
+    { enabled: open && !!task }
+  );
+
   // Inline title editing state
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -894,6 +900,54 @@ function TaskDetailSheet({
                         </p>
                       )}
                     </div>
+                  </div>
+                )}
+
+                {/* Possible Duplicates */}
+                {duplicates && duplicates.length > 0 && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 space-y-2">
+                    <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                      <Copy className="h-3.5 w-3.5" />
+                      <span className="text-xs font-semibold">
+                        Possible Duplicate{duplicates.length > 1 ? "s" : ""} ({duplicates.length})
+                      </span>
+                    </div>
+                    {duplicates.map((dup: any) => (
+                      <div
+                        key={dup.id}
+                        className="flex items-start gap-2 text-xs bg-white/60 dark:bg-black/20 rounded px-2 py-1.5 cursor-pointer hover:bg-white dark:hover:bg-black/30 transition-colors"
+                        onClick={() => {
+                          onOpenChange(false);
+                          setTimeout(() => {
+                            const allTasks = document.querySelectorAll('[data-task-id]');
+                            // Use the task list query to find and open the duplicate
+                            const el = document.querySelector(`[data-task-id="${dup.id}"]`);
+                            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }, 200);
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-foreground truncate">{dup.title}</p>
+                          <p className="text-muted-foreground mt-0.5">
+                            {dup.reason}
+                            {" · "}
+                            <span className="capitalize">{dup.status === "ideas_for_later" ? "Ideas" : dup.status}</span>
+                            {" · "}
+                            {new Date(dup.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`shrink-0 text-[9px] h-[18px] ${
+                            dup.confidence === "high"
+                              ? "text-amber-700 border-amber-300 bg-amber-100"
+                              : "text-amber-600 border-amber-200"
+                          }`}
+                        >
+                          {Math.round(dup.similarity * 100)}% match
+                        </Badge>
+                      </div>
+                    ))}
                   </div>
                 )}
 
