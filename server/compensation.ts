@@ -188,11 +188,21 @@ export async function calculateCleanerRollingScore(cleanerName: string, cleanerI
 
     // Find a clean that was scheduled within 3 days before the guest's arrival
     // (turnover cleans typically happen same day or day before check-in)
-    const matchingClean = cleanDates.find((cleanDate) => {
+    let matchingClean = cleanDates.find((cleanDate) => {
       const diffMs = reviewDate.getTime() - cleanDate.getTime();
       const diffDays = diffMs / (1000 * 60 * 60 * 24);
       return diffDays >= -1 && diffDays <= 3; // clean was 1 day after to 3 days before arrival
     });
+
+    // Fallback: if no exact date match, use the most recent clean at this
+    // property that happened BEFORE the guest's arrival. This covers cases
+    // where clean dates or arrival dates are slightly off.
+    if (!matchingClean) {
+      const beforeArrival = cleanDates
+        .filter((d) => d.getTime() <= reviewDate.getTime())
+        .sort((a, b) => b.getTime() - a.getTime());
+      matchingClean = beforeArrival[0] ?? null;
+    }
 
     if (!matchingClean) continue; // No matching clean for this review
 

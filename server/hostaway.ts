@@ -265,7 +265,7 @@ class HostawayClient {
     return { result: resp.result || [] };
   }
 
-  async getAllReviews(maxReviews = 5000): Promise<any[]> {
+  async getAllReviews(maxReviews = 30000): Promise<any[]> {
     const all: any[] = [];
     let offset = 0;
     const limit = 100;

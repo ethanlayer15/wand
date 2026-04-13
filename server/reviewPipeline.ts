@@ -79,10 +79,10 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
     // Map channel to source
     let source: "airbnb" | "vrbo" | "booking" | "direct" = "airbnb";
     if (review.channelId) {
-      // Common Hostaway channel IDs: 2005 = Airbnb, 2004 = VRBO, 2003 = Booking.com
+      // Hostaway channel IDs: 2005/2018 = Airbnb, 2004 = VRBO, 2003 = Booking.com, 2002 = direct/other
       if (review.channelId === 2004) source = "vrbo";
       else if (review.channelId === 2003) source = "booking";
-      else if (review.channelId === 2005) source = "airbnb";
+      else if (review.channelId === 2005 || review.channelId === 2018) source = "airbnb";
       else source = "direct";
     }
 
