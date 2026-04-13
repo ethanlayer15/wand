@@ -15,10 +15,9 @@ export interface MultiplierTier {
 }
 
 export const DEFAULT_MULTIPLIER_TIERS: MultiplierTier[] = [
-  { label: "Elite", minScore: 95, multiplier: 1.15 },
-  { label: "Premium", minScore: 85, multiplier: 1.10 },
-  { label: "Standard", minScore: 70, multiplier: 1.00 },
-  { label: "Training", minScore: 0, multiplier: 0.90 },
+  { label: "Platinum", minScore: 4.93, multiplier: 1.5 },
+  { label: "Gold", minScore: 4.85, multiplier: 1.2 },
+  { label: "Below Target", minScore: 0, multiplier: 0.8 },
 ];
 
 /**

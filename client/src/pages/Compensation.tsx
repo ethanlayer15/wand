@@ -1149,7 +1149,7 @@ function CleanersManagementTab() {
                         <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
                           30-Day Score
                         </span>
-                        <MultiplierBadge multiplier={mult} />
+                        <MultiplierBadge multiplier={mult} hasScore={score !== null} />
                       </div>
                       {score !== null ? (
                         <>
@@ -1246,21 +1246,21 @@ function CleanersManagementTab() {
 
 // ── Multiplier Badge ────────────────────────────────────────────────
 
-function MultiplierBadge({ multiplier }: { multiplier: number }) {
+function MultiplierBadge({ multiplier, hasScore }: { multiplier: number; hasScore: boolean }) {
   let color = "bg-gray-100 text-gray-700 border-gray-200";
   let label = `${multiplier}x`;
-  if (multiplier >= 1.5) {
+  if (!hasScore) {
+    color = "bg-gray-100 text-gray-500 border-gray-200";
+    label = "Pending";
+  } else if (multiplier >= 1.5) {
     color = "bg-emerald-50 text-emerald-700 border-emerald-200";
-    label = "1.5x Max";
+    label = "1.5x Platinum";
   } else if (multiplier >= 1.2) {
     color = "bg-blue-50 text-blue-700 border-blue-200";
-    label = "1.2x Standard";
-  } else if (multiplier >= 0.8) {
+    label = "1.2x Gold";
+  } else {
     color = "bg-amber-50 text-amber-700 border-amber-200";
     label = "0.8x Below";
-  } else {
-    color = "bg-red-50 text-red-700 border-red-200";
-    label = `${multiplier}x`;
   }
   return (
     <Badge variant="outline" className={`${color} text-[10px] font-semibold px-2 py-0.5`}>
