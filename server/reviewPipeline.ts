@@ -62,11 +62,13 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
   let updated = 0;
   for (const review of allReviews) {
     const reviewIdStr = String(review.id);
-    // Only sync published guest reviews
-    // 1. Must be published (skip drafts, pending, etc.)
-    if (review.status && review.status !== "published") continue;
+    // Only sync published guest reviews with content
+    // 1. Must be published (skip drafts, pending, empty)
+    if (review.status !== "published") continue;
     // 2. Must be from guest, not host (guest-to-host)
-    if (review.type && review.type !== "guest-to-host") continue;
+    if (review.type !== "guest-to-host") continue;
+    // 3. Must have some content (skip empty shells)
+    if (!review.publicReview && !review.privateFeedback && !review.rating) continue;
 
     const localListingId = listingMap.get(String(review.listingMapId));
     if (!localListingId) {
@@ -246,7 +248,10 @@ export async function markOldReviewsAsAnalyzed(): Promise<{ marked: number }> {
   const db = await getDb();
   if (!db) return { marked: 0 };
 
-  // Mark reviews with submittedAt before 2026 OR submittedAt is NULL as analyzed
+  // Mark reviews with submittedAt before the cutoff as analyzed.
+  // IMPORTANT: Do NOT mark submittedAt=NULL reviews — they may be newly synced
+  // reviews where Hostaway hasn't populated submittedAt yet. Those will get
+  // a real submittedAt on the next sync and should be analyzed then.
   const result = await db
     .update(reviews)
     .set({
@@ -258,10 +263,7 @@ export async function markOldReviewsAsAnalyzed(): Promise<{ marked: number }> {
     .where(
       and(
         eq(reviews.isAnalyzed, false),
-        or(
-          lt(reviews.submittedAt, ANALYSIS_CUTOFF_DATE),
-          isNull(reviews.submittedAt)
-        )
+        lt(reviews.submittedAt, ANALYSIS_CUTOFF_DATE)
       )
     );
 
@@ -602,6 +604,36 @@ export async function runReviewPipeline(): Promise<{
     }
   } catch (err: any) {
     console.error("[ReviewPipeline] Marking old reviews failed:", err.message);
+  }
+
+  // Step 1c: Repair reviews that were wrongly marked as "Skipped" —
+  // these have submittedAt >= cutoff but got caught by the old NULL check.
+  // Also reset reviews that now have text/rating but were marked skipped.
+  try {
+    const db = await getDb();
+    if (db) {
+      const repairResult = await db
+        .update(reviews)
+        .set({
+          isAnalyzed: false,
+          aiActionable: false,
+          aiSummary: null,
+          aiConfidence: null,
+        })
+        .where(
+          and(
+            eq(reviews.isAnalyzed, true),
+            eq(reviews.aiSummary, "Skipped — review predates 2026 analysis cutoff"),
+            gte(reviews.submittedAt, ANALYSIS_CUTOFF_DATE)
+          )
+        );
+      const repaired = (repairResult as any)[0]?.affectedRows ?? 0;
+      if (repaired > 0) {
+        console.log(`[ReviewPipeline] Repaired ${repaired} wrongly-skipped reviews for re-analysis`);
+      }
+    }
+  } catch (err: any) {
+    console.error("[ReviewPipeline] Repair step failed:", err.message);
   }
 
   // Step 2: AI analysis on unanalyzed 2026+ reviews (up to 500 per run)
