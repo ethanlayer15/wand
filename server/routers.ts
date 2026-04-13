@@ -1478,7 +1478,7 @@ export const appRouter = router({
           // Invitation is still created, just email failed
         }
 
-        return { success: true, email, expiresAt };
+        return { success: true, email, expiresAt, inviteUrl };
       }),
 
     // Revoke a pending invitation (admin only)

@@ -48,8 +48,16 @@ export default function TeamManagement() {
   const invitationsQuery = trpc.team.invitations.useQuery();
 
   const inviteMutation = trpc.team.invite.useMutation({
-    onSuccess: () => {
-      toast.success("Invitation sent");
+    onSuccess: (data) => {
+      if (data.inviteUrl) {
+        navigator.clipboard.writeText(data.inviteUrl).then(() => {
+          toast.success("Invite link copied to clipboard! Share it with the invitee.");
+        }).catch(() => {
+          toast.success(`Invitation created. Share this link: ${data.inviteUrl}`);
+        });
+      } else {
+        toast.success("Invitation sent");
+      }
       setInviteEmail("");
       setInviteOpen(false);
       invitationsQuery.refetch();
