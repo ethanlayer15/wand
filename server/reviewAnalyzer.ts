@@ -96,7 +96,7 @@ Respond with a JSON object matching this exact schema:
       "confidence": "<high|medium|low>"
     }
   ],
-  "taskTitle": "<suggested task title if actionable, otherwise null>",
+  "taskTitle": "<short 3-8 word action-oriented task title if actionable, otherwise null. Write it like a to-do item telling the ops team WHAT TO DO. Examples: 'Fix leaking bathroom faucet', 'Deep clean kitchen appliances', 'Replace worn mattress topper', 'Add coffee maker to unit'. NOT 'Guest reported faucet issue'.>",
   "taskCategory": "<maintenance|cleaning|improvements>",
   "taskPriority": "<low|medium|high>",
   "sentimentScore": <number from -100 to 100>,
@@ -269,6 +269,7 @@ async function writeAnalysisToDb(
       aiActionable: a.actionable === true,
       aiConfidence: a.confidence,
       aiSummary: a.summary || null,
+      aiTaskTitle: a.taskTitle || null,
       aiIssues: a.issues,
       aiSentimentScore: Math.round(a.sentimentScore),
       aiCategories: a.categories,

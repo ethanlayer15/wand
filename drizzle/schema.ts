@@ -94,6 +94,7 @@ export const reviews = mysqlTable("reviews", {
   aiActionable: boolean("aiActionable").default(false), // whether AI found actionable items
   aiConfidence: varchar("aiConfidence", { length: 16 }), // "high" | "medium" | "low"
   aiSummary: text("aiSummary"),
+  aiTaskTitle: varchar("aiTaskTitle", { length: 256 }),
   aiIssues: json("aiIssues").$type<Array<{
     type: string;
     description: string;

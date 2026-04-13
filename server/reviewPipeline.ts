@@ -430,10 +430,12 @@ export async function createTasksFromReviews(): Promise<{
     const confidence = review.aiConfidence || "low";
     const status: "created" | "ideas_for_later" = confidence === "high" ? "created" : "ideas_for_later";
 
-    // Build task title
-    const title = review.aiSummary
-      ? `Review: ${review.aiSummary.slice(0, 100)}`
-      : `Review issue at ${propertyName}`;
+    // Build task title — use AI-generated action title when available
+    const title = review.aiTaskTitle
+      ? review.aiTaskTitle
+      : review.aiSummary
+        ? `Review: ${review.aiSummary.slice(0, 100)}`
+        : `Review issue at ${propertyName}`;
 
     // Build task description with review context
     const descParts: string[] = [];

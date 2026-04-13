@@ -68,6 +68,18 @@ export async function getDb() {
         }
       }
 
+      // Add aiTaskTitle column to reviews
+      try {
+        await _pool.promise().query(
+          `ALTER TABLE reviews ADD COLUMN aiTaskTitle VARCHAR(256) DEFAULT NULL`
+        );
+        console.log("[Database] Added aiTaskTitle column to reviews");
+      } catch (e: any) {
+        if (!e.message?.includes("Duplicate column")) {
+          console.warn("[Database] Migration note:", e.message);
+        }
+      }
+
       // Add aiActionTitle column to guestMessages
       try {
         await _pool.promise().query(
