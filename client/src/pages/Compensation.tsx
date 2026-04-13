@@ -1434,16 +1434,28 @@ function CleanerScoreDetail({
                         )}
                       </div>
 
-                      {/* Review snippet */}
-                      {r.reviewText && (
-                        <div className="flex items-start gap-1.5 mt-1">
-                          <MessageSquare className="h-3 w-3 text-muted-foreground mt-0.5 shrink-0" />
-                          <p className="text-xs text-muted-foreground line-clamp-2">{r.reviewText}</p>
+                      {/* Public review */}
+                      {r.publicReview && (
+                        <div className="mt-1.5 rounded-md bg-slate-50 p-2.5">
+                          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Public Review</p>
+                          <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-line">
+                            <HighlightCleaning text={r.publicReview} />
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Private feedback */}
+                      {r.privateFeedback && (
+                        <div className="mt-1.5 rounded-md bg-amber-50/50 border border-amber-100 p-2.5">
+                          <p className="text-[10px] font-medium text-amber-700 uppercase tracking-wide mb-1">Private Feedback</p>
+                          <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-line">
+                            <HighlightCleaning text={r.privateFeedback} />
+                          </p>
                         </div>
                       )}
 
                       {r.guestName && (
-                        <p className="text-[10px] text-muted-foreground">— {r.guestName}</p>
+                        <p className="text-[10px] text-muted-foreground mt-1">— {r.guestName}</p>
                       )}
                     </div>
                   ))}
@@ -1454,6 +1466,25 @@ function CleanerScoreDetail({
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+// ── Highlight Cleaning Keywords ─────────────────────────────────────
+
+const CLEANING_KEYWORDS = /\b(clean|cleaning|cleanliness|spotless|dirty|dust|dusty|stain|stains|stained|mop|mopped|sweep|swept|vacuum|vacuumed|scrub|scrubbed|sanitize|sanitized|hygiene|hygienic|tidy|untidy|messy|immaculate|pristine|filthy|grime|grimy|wipe|wiped|disinfect|sparkling|housekeeping|housekeeper|towel|towels|linen|linens|sheet|sheets|bathroom|bathrooms|kitchen|floor|floors|hair|hairs|trash|garbage|mold|mildew|cobweb|cobwebs|smudge|smudges|streak|streaks)\b/gi;
+
+function HighlightCleaning({ text }: { text: string }) {
+  const parts = text.split(CLEANING_KEYWORDS);
+  return (
+    <>
+      {parts.map((part, i) =>
+        CLEANING_KEYWORDS.test(part) ? (
+          <strong key={i} className="text-gray-900 font-semibold">{part}</strong>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
   );
 }
 

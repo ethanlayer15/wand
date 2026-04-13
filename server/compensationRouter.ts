@@ -223,7 +223,8 @@ export const compensationRouter = router({
           scoreUsed: number;
           scoreReason: string;
           guestName: string | null;
-          reviewText: string | null;
+          publicReview: string | null;
+          privateFeedback: string | null;
           arrivalDate: string | null;
           submittedAt: string | null;
           matchedCleanDate: string | null;
@@ -297,7 +298,8 @@ export const compensationRouter = router({
             scoreUsed,
             scoreReason,
             guestName: review.guestName,
-            reviewText: review.publicReview ? review.publicReview.slice(0, 300) : null,
+            publicReview: review.publicReview || null,
+            privateFeedback: review.privateFeedback || null,
             arrivalDate: review.arrivalDate?.toISOString().slice(0, 10) ?? null,
             submittedAt: review.submittedAt?.toISOString().slice(0, 10) ?? null,
             matchedCleanDate: matchedClean.date.toISOString().slice(0, 10),
