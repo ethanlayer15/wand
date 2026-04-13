@@ -460,30 +460,34 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
           if (cleanerId) matchedCleanerIds.push(cleanerId);
         }
 
-        if (matchedCleanerIds.length === 0) {
-          // No matched cleaner — skip (not one of our cleaners)
-          result.skipped++;
-          result.skippedNoCleaner = (result.skippedNoCleaner ?? 0) + 1;
-          // Log the first 3 unmatched assignees per sync so we can diagnose.
-          if ((result.skippedNoCleaner ?? 0) <= 3 && assignees.length > 0) {
-            console.log(
-              `[CleanSync] no-cleaner sample: task=${task.id} assignees=${JSON.stringify(assignees.map((a) => ({ id: a.assignee_id, name: a.name })))}`
-            );
-          }
-          continue;
-        }
-
-        // Resolve listing. If the Breezeway property doesn't map to any
-        // Hostaway listing we SKIP the task entirely — these are typically
-        // archived/dead properties or ex-customers we no longer work with,
-        // and inserting them with listingId=NULL creates unusable rows that
-        // can't earn pay (no cleaning fee / distance) and pollute the
-        // cleaning-reports pipeline.
+        // Resolve listing first — we need it for both pay records and
+        // cleaning reports.  If the Breezeway property doesn't map to any
+        // listing we SKIP entirely (archived/dead properties).
         const listing = bwHomeIdToListing.get(task.home_id);
         if (!listing) {
           result.skipped++;
           result.skippedNoListing = (result.skippedNoListing ?? 0) + 1;
           continue;
+        }
+
+        if (matchedCleanerIds.length === 0) {
+          // No matched cleaner. If the listing has cleaning reports enabled,
+          // we still insert with cleanerId=null so the report fires. Otherwise
+          // skip — these are properties where we don't track pay either.
+          if (!listing.cleaningReportsEnabled) {
+            result.skipped++;
+            result.skippedNoCleaner = (result.skippedNoCleaner ?? 0) + 1;
+            if ((result.skippedNoCleaner ?? 0) <= 3 && assignees.length > 0) {
+              console.log(
+                `[CleanSync] no-cleaner sample: task=${task.id} assignees=${JSON.stringify(assignees.map((a) => ({ id: a.assignee_id, name: a.name })))}`
+              );
+            }
+            continue;
+          }
+          // Fall through — insert with cleanerId=null for report-only
+          console.log(
+            `[CleanSync] No cleaner matched for task ${task.id} on "${listing.internalName || listing.name}" but cleaningReports enabled — inserting for report`
+          );
         }
         const propertyName = listing.internalName || listing.name || `Property ${task.home_id}`;
         const cleaningFee = listing.cleaningFeeCharge
@@ -503,8 +507,8 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
         const isPaired = matchedCleanerIds.length >= 2;
         const splitRatio = isPaired ? "0.50" : "1.00";
 
-        // Insert for the primary cleaner
-        const primaryCleanerId = matchedCleanerIds[0];
+        // Insert for the primary cleaner (may be null for report-only records)
+        const primaryCleanerId = matchedCleanerIds[0] ?? null;
         const pairedCleanerId = isPaired ? matchedCleanerIds[1] : null;
 
         const [insertResult] = await db.insert(completedCleans).values({
