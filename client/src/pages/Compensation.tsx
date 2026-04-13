@@ -21,6 +21,12 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
   Table,
   TableBody,
   TableCell,
@@ -55,6 +61,10 @@ import {
   ClipboardList,
   Phone,
   Wrench,
+  Calendar,
+  Home,
+  MessageSquare,
+  ChevronRight,
 } from "lucide-react";
 import { useState, useMemo, useCallback, useRef } from "react";
 import { toast } from "sonner";
@@ -726,6 +736,8 @@ function CleanersManagementTab() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editValues, setEditValues] = useState({ name: "", email: "", quickbooksEmployeeId: "", podId: null as number | null, podIds: [] as number[] });
   const [podFilter, setPodFilter] = useState<number | null>(null);
+  const [selectedCleanerId, setSelectedCleanerId] = useState<number | null>(null);
+  const [detailDaysBack, setDetailDaysBack] = useState(30);
 
   const startEdit = (c: NonNullable<typeof allCleaners>[0]) => {
     setEditingId(c.id);
@@ -1047,7 +1059,11 @@ function CleanersManagementTab() {
             const mult = c.currentMultiplier ? Number(c.currentMultiplier) : 1.0;
 
             return (
-              <Card key={c.id} className="p-5">
+              <Card
+                key={c.id}
+                className="p-5 cursor-pointer hover:shadow-md transition-shadow"
+                onClick={() => { if (editingId !== c.id) setSelectedCleanerId(c.id); }}
+              >
                 {editingId === c.id ? (
                   <div className="space-y-3">
                     <Input
@@ -1138,7 +1154,7 @@ function CleanersManagementTab() {
                           );
                         })()}
                       </div>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEdit(c)}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); startEdit(c); }}>
                         <Edit2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
@@ -1240,7 +1256,204 @@ function CleanersManagementTab() {
           })}
         </div>
       )}
+
+      {/* Score Detail Sheet */}
+      <CleanerScoreDetail
+        cleanerId={selectedCleanerId}
+        daysBack={detailDaysBack}
+        onDaysBackChange={setDetailDaysBack}
+        onClose={() => setSelectedCleanerId(null)}
+      />
     </div>
+  );
+}
+
+// ── Cleaner Score Detail Sheet ──────────────────────────────────────
+
+function CleanerScoreDetail({
+  cleanerId,
+  daysBack,
+  onDaysBackChange,
+  onClose,
+}: {
+  cleanerId: number | null;
+  daysBack: number;
+  onDaysBackChange: (d: number) => void;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = trpc.compensation.cleaners.scoreDetail.useQuery(
+    { cleanerId: cleanerId!, daysBack },
+    { enabled: !!cleanerId }
+  );
+
+  const SOURCE_COLORS: Record<string, string> = {
+    airbnb: "bg-rose-50 text-rose-700 border-rose-200",
+    vrbo: "bg-blue-50 text-blue-700 border-blue-200",
+    booking: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    direct: "bg-gray-50 text-gray-700 border-gray-200",
+  };
+
+  const SCORE_COLORS = (s: number) =>
+    s >= 5 ? "text-emerald-700 bg-emerald-50" :
+    s >= 4 ? "text-blue-700 bg-blue-50" :
+    s >= 3 ? "text-amber-700 bg-amber-50" :
+    "text-red-700 bg-red-50";
+
+  return (
+    <Sheet open={!!cleanerId} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
+            {data?.cleaner.name ?? "Cleaner Detail"}
+          </SheetTitle>
+          {data?.cleaner.email && (
+            <p className="text-sm text-muted-foreground">{data.cleaner.email}</p>
+          )}
+        </SheetHeader>
+
+        {/* Date range filter */}
+        <div className="flex items-center gap-2 mt-4 mb-4">
+          <Calendar className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">Date range:</span>
+          <div className="flex gap-1">
+            {[30, 60, 90, 180, 365].map((d) => (
+              <Button
+                key={d}
+                variant={daysBack === d ? "default" : "outline"}
+                size="sm"
+                className="h-7 text-xs px-2"
+                onClick={() => onDaysBackChange(d)}
+              >
+                {d <= 90 ? `${d}d` : d === 180 ? "6mo" : "1yr"}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="space-y-3 mt-4">
+            <Skeleton className="h-20" />
+            <Skeleton className="h-40" />
+          </div>
+        ) : !data ? (
+          <p className="text-sm text-muted-foreground mt-4">No data available</p>
+        ) : (
+          <div className="space-y-4 mt-2">
+            {/* Score summary */}
+            <div className="rounded-lg border bg-gradient-to-r from-slate-50 to-white p-4">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <p className="text-2xl font-bold">
+                    {data.avgScore !== null ? (
+                      <>
+                        {data.avgScore.toFixed(2)}
+                        <Star className="inline h-4 w-4 ml-0.5 text-amber-500 fill-amber-500" />
+                      </>
+                    ) : "—"}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground uppercase">Avg Score</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold">{data.reviewCount}</p>
+                  <p className="text-[10px] text-muted-foreground uppercase">Reviews</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold">{data.scorableCleans}</p>
+                  <p className="text-[10px] text-muted-foreground uppercase">Scorable Cleans</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Per-property breakdown */}
+            {data.byProperty.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  By Property
+                </h4>
+                <div className="space-y-1">
+                  {data.byProperty.map((p) => (
+                    <div key={p.name} className="flex items-center justify-between text-sm rounded-md px-3 py-1.5 bg-muted/30">
+                      <div className="flex items-center gap-2">
+                        <Home className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="truncate max-w-[240px]">{p.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-muted-foreground">{p.count} review{p.count !== 1 ? "s" : ""}</span>
+                        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${SCORE_COLORS(p.avg)}`}>
+                          {p.avg.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Individual reviews */}
+            <div>
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Reviews ({data.reviews.length})
+              </h4>
+              {data.reviews.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">No reviews matched to cleans in this period</p>
+              ) : (
+                <div className="space-y-2">
+                  {data.reviews.map((r) => (
+                    <div key={r.reviewId} className="rounded-lg border p-3 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className={`text-[10px] ${SOURCE_COLORS[r.source] || SOURCE_COLORS.direct}`}>
+                            {r.source}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground truncate max-w-[160px]">{r.listingName}</span>
+                        </div>
+                        <span className={`text-sm font-bold px-2 py-0.5 rounded ${SCORE_COLORS(r.scoreUsed)}`}>
+                          {r.scoreUsed.toFixed(1)}
+                        </span>
+                      </div>
+
+                      {/* Ratings row */}
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        {r.cleanlinessRating !== null && (
+                          <span>Cleanliness: <strong>{r.cleanlinessRating}</strong>/5</span>
+                        )}
+                        {r.rating !== null && (
+                          <span>Overall: <strong>{r.rating}</strong></span>
+                        )}
+                        <span className="text-[10px] italic">{r.scoreReason}</span>
+                      </div>
+
+                      {/* Dates */}
+                      <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                        {r.arrivalDate && <span>Guest arrival: {r.arrivalDate}</span>}
+                        {r.submittedAt && <span>Reviewed: {r.submittedAt}</span>}
+                        {r.matchedCleanDate && (
+                          <span className="text-indigo-600">
+                            Matched clean: {r.matchedCleanDate}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Review snippet */}
+                      {r.reviewText && (
+                        <div className="flex items-start gap-1.5 mt-1">
+                          <MessageSquare className="h-3 w-3 text-muted-foreground mt-0.5 shrink-0" />
+                          <p className="text-xs text-muted-foreground line-clamp-2">{r.reviewText}</p>
+                        </div>
+                      )}
+
+                      {r.guestName && (
+                        <p className="text-[10px] text-muted-foreground">— {r.guestName}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 

@@ -36,7 +36,7 @@ import {
   getBreezewayProperties,
 } from "./db";
 import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis, breezewayTeam } from "../drizzle/schema";
-import { eq, desc, gte, isNotNull } from "drizzle-orm";
+import { eq, desc, gte, and, isNotNull } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
 import {
   syncCompletedCleans,
@@ -162,6 +162,183 @@ export const compensationRouter = router({
           })
           .where(eq(cleaners.id, cleaner.id));
         return { score, reviewCount, multiplier };
+      }),
+
+    /**
+     * Detail endpoint — returns the reviews, cleans, and scoring breakdown
+     * that feed into a cleaner's rolling score. Supports date range filtering.
+     */
+    scoreDetail: publicProcedure
+      .input(z.object({
+        cleanerId: z.number(),
+        daysBack: z.number().min(7).max(365).default(30),
+      }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return null;
+
+        const cleaner = await getCleanerById(input.cleanerId);
+        if (!cleaner) return null;
+
+        const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - input.daysBack);
+        const cleansFromDate = new Date();
+        cleansFromDate.setDate(cleansFromDate.getDate() - (input.daysBack + 15)); // wider window for cleans
+
+        // Get cleans
+        const cleanerCleans = await db.select().from(completedCleans).where(
+          and(eq(completedCleans.cleanerId, input.cleanerId), gte(completedCleans.scheduledDate, cleansFromDate))
+        );
+
+        // Build listing → clean dates map (scorable only)
+        const cleansByListing = new Map<number, { date: Date; title: string }[]>();
+        for (const c of cleanerCleans) {
+          if (!c.listingId || !c.scheduledDate) continue;
+          if (!isScorableClean(c.taskTitle)) continue;
+          const arr = cleansByListing.get(c.listingId) || [];
+          arr.push({ date: new Date(c.scheduledDate), title: c.taskTitle || "" });
+          cleansByListing.set(c.listingId, arr);
+        }
+
+        // Get reviews in the date range
+        const recentReviews = await db.select().from(reviews).where(gte(reviews.submittedAt, fromDate));
+
+        // Get AI analyses
+        const { reviewAnalysis } = await import("../drizzle/schema");
+        const allAnalyses = await db.select().from(reviewAnalysis);
+        const analysisMap = new Map(allAnalyses.map((a: any) => [a.reviewId, a]));
+
+        // Get listing names
+        const allListings = await db.select().from(listings);
+        const listingMap = new Map(allListings.map((l) => [l.id, l]));
+
+        // Match reviews to cleans and build detail records
+        const matchedReviews: Array<{
+          reviewId: number;
+          listingId: number;
+          listingName: string;
+          source: string;
+          rating: number | null;
+          cleanlinessRating: number | null;
+          scoreUsed: number;
+          scoreReason: string;
+          guestName: string | null;
+          reviewText: string | null;
+          arrivalDate: string | null;
+          submittedAt: string | null;
+          matchedCleanDate: string | null;
+          matchedCleanTitle: string | null;
+        }> = [];
+
+        const listingIds = [...cleansByListing.keys()];
+
+        for (const review of recentReviews) {
+          if (!review.listingId) continue;
+          if (!listingIds.includes(review.listingId)) continue;
+
+          const cleanEntries = cleansByListing.get(review.listingId);
+          if (!cleanEntries) continue;
+
+          const reviewDate = review.arrivalDate || review.submittedAt;
+          if (!reviewDate) continue;
+
+          // Find matching clean
+          let matchedClean = cleanEntries.find((c) => {
+            const diff = (reviewDate.getTime() - c.date.getTime()) / (1000 * 60 * 60 * 24);
+            return diff >= -1 && diff <= 3;
+          });
+          if (!matchedClean) {
+            const before = cleanEntries.filter((c) => c.date.getTime() <= reviewDate.getTime())
+              .sort((a, b) => b.date.getTime() - a.date.getTime());
+            matchedClean = before[0] ?? null;
+          }
+          if (!matchedClean) continue;
+
+          // Determine score
+          const isAirbnb = review.source === "airbnb";
+          let scoreUsed: number | null = null;
+          let scoreReason = "";
+
+          if (isAirbnb && review.cleanlinessRating) {
+            scoreUsed = review.cleanlinessRating;
+            scoreReason = "Airbnb cleanliness sub-score";
+          } else if (!isAirbnb) {
+            const analysis = analysisMap.get(review.id);
+            const hasCleaningIssue = (analysis as any)?.issues?.some((i: any) => i.type === "cleaning") ?? false;
+            if (hasCleaningIssue) {
+              scoreUsed = review.rating ? (review.rating > 5 ? review.rating / 2 : review.rating) : 3;
+              scoreReason = "Cleaning issue detected — used overall rating";
+            } else {
+              scoreUsed = 5;
+              scoreReason = "No cleaning issues — default 5";
+            }
+          } else if (isAirbnb && !review.cleanlinessRating) {
+            const analysis = analysisMap.get(review.id);
+            const hasCleaningIssue = (analysis as any)?.issues?.some((i: any) => i.type === "cleaning") ?? false;
+            if (hasCleaningIssue) {
+              scoreUsed = review.rating ? (review.rating > 5 ? review.rating / 2 : review.rating) : 3;
+              scoreReason = "Airbnb (no sub-score) — cleaning issue detected";
+            } else {
+              scoreUsed = 5;
+              scoreReason = "Airbnb (no sub-score) — no issues";
+            }
+          }
+
+          if (scoreUsed === null) continue;
+
+          const listing = listingMap.get(review.listingId);
+          matchedReviews.push({
+            reviewId: review.id,
+            listingId: review.listingId,
+            listingName: listing?.internalName || listing?.name || `Listing #${review.listingId}`,
+            source: review.source || "unknown",
+            rating: review.rating,
+            cleanlinessRating: review.cleanlinessRating,
+            scoreUsed,
+            scoreReason,
+            guestName: review.guestName,
+            reviewText: review.publicReview ? review.publicReview.slice(0, 300) : null,
+            arrivalDate: review.arrivalDate?.toISOString().slice(0, 10) ?? null,
+            submittedAt: review.submittedAt?.toISOString().slice(0, 10) ?? null,
+            matchedCleanDate: matchedClean.date.toISOString().slice(0, 10),
+            matchedCleanTitle: matchedClean.title,
+          });
+        }
+
+        // Sort by submitted date descending
+        matchedReviews.sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
+
+        // Compute summary
+        const scores = matchedReviews.map((r) => r.scoreUsed);
+        const avgScore = scores.length > 0
+          ? Number((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2))
+          : null;
+
+        // Per-property breakdown
+        const byProperty: Record<number, { name: string; count: number; avg: number }> = {};
+        for (const r of matchedReviews) {
+          if (!byProperty[r.listingId]) {
+            byProperty[r.listingId] = { name: r.listingName, count: 0, avg: 0 };
+          }
+          byProperty[r.listingId].count++;
+        }
+        for (const lid of Object.keys(byProperty)) {
+          const propReviews = matchedReviews.filter((r) => r.listingId === Number(lid));
+          byProperty[Number(lid)].avg = Number(
+            (propReviews.reduce((a, r) => a + r.scoreUsed, 0) / propReviews.length).toFixed(2)
+          );
+        }
+
+        return {
+          cleaner: { id: cleaner.id, name: cleaner.name, email: cleaner.email },
+          daysBack: input.daysBack,
+          totalCleans: cleanerCleans.length,
+          scorableCleans: [...cleansByListing.values()].flat().length,
+          reviewCount: matchedReviews.length,
+          avgScore,
+          reviews: matchedReviews,
+          byProperty: Object.values(byProperty).sort((a, b) => b.count - a.count),
+        };
       }),
 
     /**
