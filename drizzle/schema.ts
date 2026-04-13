@@ -532,6 +532,7 @@ export const guestMessages = mysqlTable("guestMessages", {
   aiSentiment: mysqlEnum("aiSentiment", ["positive", "neutral", "negative"]),
   aiUrgency: mysqlEnum("aiUrgency", ["low", "medium", "high", "critical"]),
   aiSummary: text("aiSummary"),
+  aiActionTitle: varchar("aiActionTitle", { length: 256 }),
   aiIssues: json("aiIssues").$type<string[]>(),
   aiActionItems: json("aiActionItems").$type<string[]>(),
   taskId: int("taskId"), // FK → tasks.id, nullable — links message to auto-created task

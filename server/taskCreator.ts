@@ -183,6 +183,13 @@ function buildTaskTitle(msg: GuestMessage): string {
       : msg.aiUrgency === "high"
         ? "⚠️ "
         : "";
+
+  // Use the action-oriented title from AI when available
+  if (msg.aiActionTitle) {
+    return `${prefix}${msg.aiActionTitle}`;
+  }
+
+  // Fallback for older messages without aiActionTitle
   const category = msg.aiCategory
     ? msg.aiCategory.charAt(0).toUpperCase() + msg.aiCategory.slice(1)
     : "Issue";

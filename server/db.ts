@@ -68,6 +68,18 @@ export async function getDb() {
         }
       }
 
+      // Add aiActionTitle column to guestMessages
+      try {
+        await _pool.promise().query(
+          `ALTER TABLE guestMessages ADD COLUMN aiActionTitle VARCHAR(256) DEFAULT NULL`
+        );
+        console.log("[Database] Added aiActionTitle column to guestMessages");
+      } catch (e: any) {
+        if (!e.message?.includes("Duplicate column")) {
+          console.warn("[Database] Migration note:", e.message);
+        }
+      }
+
       // Create cleaning report tables if they don't exist
       try {
         await _pool.promise().query(`
@@ -896,6 +908,7 @@ export async function updateGuestMessageAnalysis(
     aiSentiment: InsertGuestMessage["aiSentiment"];
     aiUrgency: InsertGuestMessage["aiUrgency"];
     aiSummary: string | null;
+    aiActionTitle?: string | null;
     aiIssues: string[] | null;
     aiActionItems?: string[] | null;
   }
@@ -910,6 +923,7 @@ export async function updateGuestMessageAnalysis(
       aiSentiment: analysis.aiSentiment,
       aiUrgency: analysis.aiUrgency,
       aiSummary: analysis.aiSummary,
+      aiActionTitle: analysis.aiActionTitle ?? null,
       aiIssues: analysis.aiIssues,
       aiActionItems: analysis.aiActionItems ?? null,
     })

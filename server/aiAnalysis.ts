@@ -225,6 +225,7 @@ Respond with a JSON object matching this exact schema:
   "sentiment": "<positive|neutral|negative>",
   "urgency": "<low|medium|high|critical>",
   "summary": "<one-sentence summary>",
+  "actionTitle": "<short action-oriented task title for the ops team>",
   "issues": ["<specific issues mentioned, if any>"],
   "actionItems": ["<suggested steps to resolve or prevent this issue next time>"]
 }
@@ -232,6 +233,8 @@ Respond with a JSON object matching this exact schema:
 Rules:
 - category: the primary topic of the message
 - urgency: critical = safety/health hazard, high = needs same-day response, medium = within 24h, low = informational
+- summary: a factual one-sentence summary of what the guest said
+- actionTitle: a short (3-8 word) action-oriented title that tells the ops team WHAT TO DO, not what the guest said. Write it like a to-do item. Examples: "Check dishwasher operation", "Ensure shop key is mailed back", "Fix leaking kitchen faucet", "Replace stained towels", "Unclog master shower drain", "Investigate AC not cooling". For questions, use phrasing like "Answer guest question about checkout" or "Respond to wifi inquiry".
 - issues: extract specific actionable items (e.g., "broken AC", "stained towels")
 - actionItems: for negative sentiment or actionable categories (maintenance, cleaning, complaint), suggest concrete steps to resolve or prevent the issue. For compliments/questions, return an empty array.
 - Be concise and precise
@@ -294,10 +297,11 @@ export async function analyzeGuestMessages(batchSize = 20): Promise<{
                 sentiment: { type: "string" },
                 urgency: { type: "string" },
                 summary: { type: "string" },
+                actionTitle: { type: "string" },
                 issues: { type: "array", items: { type: "string" } },
                 actionItems: { type: "array", items: { type: "string" } },
               },
-              required: ["category", "sentiment", "urgency", "summary", "issues", "actionItems"],
+              required: ["category", "sentiment", "urgency", "summary", "actionTitle", "issues", "actionItems"],
               additionalProperties: false,
             },
           },
@@ -326,6 +330,7 @@ export async function analyzeGuestMessages(batchSize = 20): Promise<{
         aiSentiment: sentiment as any,
         aiUrgency: urgency as any,
         aiSummary: result.summary || null,
+        aiActionTitle: result.actionTitle || null,
         aiIssues: result.issues || [],
         aiActionItems: result.actionItems || [],
       });
