@@ -187,7 +187,7 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                 </p>
                 <div className="flex items-baseline gap-2">
                   <span className="text-4xl font-bold text-white">
-                    {profile.qualityScore !== null ? profile.qualityScore.toFixed(2) : "—"}
+                    {profile.qualityScore != null ? Number(profile.qualityScore).toFixed(2) : "—"}
                   </span>
                   <span className="text-emerald-400 text-sm">/ 5.00</span>
                 </div>
@@ -329,13 +329,13 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                             </Badge>
                             {weeklyPay.qualityScore !== null && (
                               <span className="text-emerald-500 text-xs">
-                                Score: {weeklyPay.qualityScore.toFixed(2)}
+                                Score: {Number(weeklyPay.qualityScore).toFixed(2)}
                               </span>
                             )}
                           </div>
                         </div>
                       </div>
-                      <span className="text-white font-semibold">×{weeklyPay.qualityMultiplier.toFixed(1)}</span>
+                      <span className="text-white font-semibold">×{Number(weeklyPay.qualityMultiplier ?? 1).toFixed(1)}</span>
                     </div>
 
                     {/* Volume Multiplier */}
@@ -349,7 +349,7 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                           </Badge>
                         </div>
                       </div>
-                      <span className="text-white font-semibold">×{weeklyPay.volumeMultiplier.toFixed(1)}</span>
+                      <span className="text-white font-semibold">×{Number(weeklyPay.volumeMultiplier ?? 1).toFixed(1)}</span>
                     </div>
 
                     {/* Mileage */}
@@ -360,7 +360,7 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                           <div>
                             <p className="text-white text-sm font-medium">Mileage</p>
                             <p className="text-emerald-500 text-xs">
-                              {weeklyPay.totalMileage.toFixed(1)} mi × {formatCurrency(weeklyPay.mileageRate)}/mi
+                              {Number(weeklyPay.totalMileage ?? 0).toFixed(1)} mi × {formatCurrency(weeklyPay.mileageRate ?? 0)}/mi
                             </p>
                           </div>
                         </div>
@@ -423,7 +423,7 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                             </div>
                             <div className="flex items-center gap-3 text-xs text-emerald-400">
                               {clean.distanceMiles && (
-                                <span>{(clean.distanceMiles * 2).toFixed(1)} mi RT</span>
+                                <span>{(Number(clean.distanceMiles ?? 0) * 2).toFixed(1)} mi RT</span>
                               )}
                               {clean.scheduledDate && (
                                 <span>{formatDate(clean.scheduledDate)}</span>
@@ -470,7 +470,7 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                         {period === "week" ? "This Week" : period === "month" ? "This Month" : period === "year" ? "This Year" : "All Time"} Average
                       </p>
                       <p className="text-3xl font-bold text-white mt-1">
-                        {reviews.averageScore !== null ? reviews.averageScore.toFixed(2) : "—"}
+                        {reviews.averageScore != null ? Number(reviews.averageScore).toFixed(2) : "—"}
                       </p>
                     </div>
                     <div className="text-right">
@@ -508,10 +508,10 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                             {review.guestName} · {review.reviewDate ? formatDate(review.reviewDate) : ""}
                           </p>
                         </div>
-                        {review.rating !== null && (
+                        {review.rating != null && (
                           <div className="flex items-center gap-1">
                             <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
-                            <span className="text-white font-semibold text-sm">{review.rating.toFixed(1)}</span>
+                            <span className="text-white font-semibold text-sm">{Number(review.rating).toFixed(1)}</span>
                           </div>
                         )}
                       </div>
