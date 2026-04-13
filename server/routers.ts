@@ -1421,7 +1421,7 @@ export const appRouter = router({
       .input(
         z.object({
           email: z.string().email(),
-          role: z.enum(["manager", "member"]),
+          role: z.enum(["admin", "manager", "member"]),
           origin: z.string(), // frontend origin for building invite link
         })
       )

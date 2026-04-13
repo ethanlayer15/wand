@@ -44,10 +44,10 @@ export default function TeamManagement() {
   const [inviteRole, setInviteRole] = useState<string>("member");
   const [inviteOpen, setInviteOpen] = useState(false);
 
-  const membersQuery = trpc.auth.team.listMembers.useQuery();
-  const invitationsQuery = trpc.auth.team.listInvitations.useQuery();
+  const membersQuery = trpc.team.members.useQuery();
+  const invitationsQuery = trpc.team.invitations.useQuery();
 
-  const inviteMutation = trpc.auth.team.createInvitation.useMutation({
+  const inviteMutation = trpc.team.invite.useMutation({
     onSuccess: () => {
       toast.success("Invitation sent");
       setInviteEmail("");
@@ -57,7 +57,7 @@ export default function TeamManagement() {
     onError: (err) => toast.error(err.message),
   });
 
-  const changeRoleMutation = trpc.auth.team.changeRole.useMutation({
+  const changeRoleMutation = trpc.team.changeRole.useMutation({
     onSuccess: () => {
       toast.success("Role updated");
       membersQuery.refetch();
@@ -65,7 +65,7 @@ export default function TeamManagement() {
     onError: (err) => toast.error(err.message),
   });
 
-  const removeMemberMutation = trpc.auth.team.removeMember.useMutation({
+  const removeMemberMutation = trpc.team.removeMember.useMutation({
     onSuccess: () => {
       toast.success("Member removed");
       membersQuery.refetch();
@@ -73,7 +73,7 @@ export default function TeamManagement() {
     onError: (err) => toast.error(err.message),
   });
 
-  const revokeInvitationMutation = trpc.auth.team.revokeInvitation.useMutation({
+  const revokeInvitationMutation = trpc.team.revokeInvitation.useMutation({
     onSuccess: () => {
       toast.success("Invitation revoked");
       invitationsQuery.refetch();
@@ -134,7 +134,7 @@ export default function TeamManagement() {
               </div>
               <DialogFooter>
                 <Button
-                  onClick={() => inviteMutation.mutate({ email: inviteEmail, role: inviteRole })}
+                  onClick={() => inviteMutation.mutate({ email: inviteEmail, role: inviteRole as "manager" | "member", origin: window.location.origin })}
                   disabled={!inviteEmail || inviteMutation.isPending}
                 >
                   {inviteMutation.isPending ? "Sending…" : "Send Invitation"}
