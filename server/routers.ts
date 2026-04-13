@@ -605,13 +605,13 @@ export const appRouter = router({
       }),
   }),
 
-  // Integrations (admin only)
+  // Integrations (manager+)
   integrations: router({
-    list: adminProcedure.query(async () => {
+    list: managerProcedure.query(async () => {
       return getIntegrations();
     }),
 
-    status: adminProcedure
+    status: managerProcedure
       .input(z.object({ name: z.string() }))
       .query(async ({ input }) => {
         const integration = await getIntegration(input.name);
@@ -619,41 +619,41 @@ export const appRouter = router({
       }),
 
     // Trigger a full sync of all integrations
-    syncAll: adminProcedure.mutation(async () => {
+    syncAll: managerProcedure.mutation(async () => {
       const result = await runFullSync();
       return result;
     }),
 
     // Sync only Hostaway listings
-    syncHostawayListings: adminProcedure.mutation(async () => {
+    syncHostawayListings: managerProcedure.mutation(async () => {
       return syncHostawayListings();
     }),
 
     // Sync only Hostaway reviews
-    syncHostawayReviews: adminProcedure.mutation(async () => {
+    syncHostawayReviews: managerProcedure.mutation(async () => {
       return syncHostawayReviews();
     }),
 
     // Re-fetch Hostaway review payloads and populate cleanlinessRating for
     // rows where it's still NULL. Safe to run multiple times.
-    backfillReviewCleanliness: adminProcedure.mutation(async () => {
+    backfillReviewCleanliness: managerProcedure.mutation(async () => {
       return backfillCleanlinessRatings();
     }),
 
     // Clear isAnalyzed on all 2026+ reviews so the next pipeline run
     // re-analyzes them with the current (unified) analyzer. Useful after
     // a prompt / schema change.
-    reanalyzeAllReviews: adminProcedure.mutation(async () => {
+    reanalyzeAllReviews: managerProcedure.mutation(async () => {
       return resetAnalysisState();
     }),
 
     // Sync only Breezeway properties
-    syncBreezewayProperties: adminProcedure.mutation(async () => {
+    syncBreezewayProperties: managerProcedure.mutation(async () => {
       return syncBreezewayProperties();
     }),
 
     // Sync property tags from Breezeway — tries multiple API approaches
-    syncBreezewayPropertyTags: adminProcedure.mutation(async () => {
+    syncBreezewayPropertyTags: managerProcedure.mutation(async () => {
       const client = createBreezewayClient();
       const db = await getDb();
       if (!db) throw new Error("Database not available");
@@ -832,7 +832,7 @@ export const appRouter = router({
     }),
 
     // Manual bulk-tag properties (for restoring tags wiped by sync)
-    bulkTagProperties: adminProcedure
+    bulkTagProperties: managerProcedure
       .input(z.object({
         tag: z.string(),
         propertyIds: z.array(z.number()).optional(), // DB IDs
@@ -882,7 +882,7 @@ export const appRouter = router({
       }),
 
     // List all properties with their current tags (for tag management UI)
-    listPropertyTags: adminProcedure.query(async () => {
+    listPropertyTags: managerProcedure.query(async () => {
       const allProps = await getBreezewayProperties();
       return allProps.map(p => ({
         id: p.id,
@@ -894,19 +894,19 @@ export const appRouter = router({
     }),
 
     // Sync only Breezeway team
-    syncBreezewayTeam: adminProcedure.mutation(async () => {
+    syncBreezewayTeam: managerProcedure.mutation(async () => {
       return syncBreezewayTeam();
     }),
 
     // Register Breezeway webhooks
-    registerBreezewayWebhooks: adminProcedure
+    registerBreezewayWebhooks: managerProcedure
       .input(z.object({ webhookUrl: z.string().url() }))
       .mutation(async ({ input }) => {
         return registerBreezewayWebhooks(input.webhookUrl);
       }),
 
     // List active Breezeway webhooks
-    listBreezewayWebhooks: adminProcedure.query(async () => {
+    listBreezewayWebhooks: managerProcedure.query(async () => {
       try {
         return listBreezewayWebhooks();
       } catch {
@@ -926,7 +926,7 @@ export const appRouter = router({
     }),
 
     // Manually trigger SDT check
-    triggerSdtCheck: adminProcedure.mutation(async () => {
+    triggerSdtCheck: managerProcedure.mutation(async () => {
       const result = await checkAndNotifyUnassignedSdts();
       return result;
     }),
@@ -1367,13 +1367,13 @@ export const appRouter = router({
         return getBreezewaySyncConfig();
       }),
 
-      // Activate sync (admin only)
-      activate: adminProcedure.mutation(async () => {
+      // Activate sync
+      activate: managerProcedure.mutation(async () => {
         return activateBreezewayTaskSync();
       }),
 
-      // Deactivate sync (admin only)
-      deactivate: adminProcedure.mutation(async () => {
+      // Deactivate sync
+      deactivate: managerProcedure.mutation(async () => {
         await deactivateBreezewayTaskSync();
         return { success: true };
       }),
