@@ -61,13 +61,13 @@ export function getNextTierInfo(score: number | null): {
   label: string;
 } | null {
   const nextInfo = getNextTierInfoFromConfig(score, DEFAULT_MULTIPLIER_TIERS);
-  if (!nextInfo) return null;
+  if (!nextInfo || !nextInfo.nextTier) return null;
 
   return {
     nextTierScore: nextInfo.nextTier.minScore,
     nextMultiplier: nextInfo.nextTier.multiplier,
     pointsNeeded: nextInfo.pointsNeeded,
-    label: nextInfo.label,
+    label: nextInfo.nextTier.label,
   };
 }
 
