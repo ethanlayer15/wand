@@ -370,11 +370,18 @@ export async function syncBreezewayTeam(): Promise<{ synced: number; errors: num
     const { cleaners } = await import("../drizzle/schema");
     const allTeamMembers = await db.select().from(breezewayTeam);
     const existingCleaners = await db.select().from(cleaners);
+    // Check both local PK and Breezeway assignee ID to prevent duplicates
     const linkedTeamIds = new Set(existingCleaners.map((c) => c.breezewayTeamId).filter(Boolean));
+    const linkedBwIds = new Set(
+      existingCleaners
+        .map((c) => c.breezewayTeamId)
+        .filter(Boolean)
+    );
     let autoCreated = 0;
 
     for (const tm of allTeamMembers) {
-      if (linkedTeamIds.has(tm.id)) continue;
+      // Skip if already linked by local PK or by Breezeway assignee ID
+      if (linkedTeamIds.has(tm.id) || linkedBwIds.has(Number(tm.breezewayId))) continue;
       const name = [tm.firstName, tm.lastName].filter(Boolean).join(" ") || `Team Member ${tm.breezewayId}`;
       try {
         await db.insert(cleaners).values({
