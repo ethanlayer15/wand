@@ -269,14 +269,20 @@ export function startCronJobs(): void {
   timers.push(syncTimer);
   console.log("[Cron] Breezeway task sync scheduled (every 15 min, if enabled)");
 
-  // 4b. Completed cleans sync — every 30 minutes (syncs finished housekeeping tasks to completedCleans)
+  // 4b. Completed cleans sync — initial run on startup + every 30 minutes
+  const cleanSyncStartup = setTimeout(() => {
+    runCompletedCleansSync().catch((err) =>
+      console.error("[Cron] Initial completed cleans sync failed:", err.message)
+    );
+  }, 15_000); // 15s after boot
+  timers.push(cleanSyncStartup);
   const cleanSyncTimer = setInterval(() => {
     runCompletedCleansSync().catch((err) =>
       console.error("[Cron] Completed cleans sync interval failed:", err.message)
     );
   }, 30 * 60 * 1000); // 30 minutes
   timers.push(cleanSyncTimer);
-  console.log("[Cron] Completed cleans sync scheduled (every 30 min, if enabled)");
+  console.log("[Cron] Completed cleans sync scheduled (startup + every 30 min, if enabled)");
 
   // 4c. Breezeway team sync — once on startup and then daily
   const teamSyncStartup = setTimeout(async () => {

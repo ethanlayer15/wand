@@ -88,7 +88,11 @@ export function isScorableClean(taskTitle: string | null | undefined): boolean {
   if (t.includes("turnover clean")) return true;
   // "Deep Clean" or "DEEP CLEAN" as the primary task — not a substring
   // in a longer maintenance description like "Deep clean shower grout"
-  if (t === "deep clean") return true;
+  // Match: "deep clean", "DEEP CLEAN", "Monthly deep clean", etc.
+  // But NOT: "Deep clean shower grout" (has words after "deep clean" that aren't generic)
+  if (/^(?:.*\s)?deep\s+clean(?:\s*[-–]\s*.*)?$/i.test(t)) return true;
+  // Also match "initial clean" and "cleaning" tasks that are full property cleans
+  if (t === "initial clean" || t.startsWith("initial clean ")) return true;
   return false;
 }
 

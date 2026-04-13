@@ -428,8 +428,8 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
       `[CleanSync] Queried ${queryableProperties.length} properties · raw tasks: ${rawFetched} · finished/closed: ${allTasks.length}`
     );
 
-    // Hard cutoff: skip tasks created before March 30, 2026
-    const CUTOFF_DATE = new Date("2026-03-30T00:00:00.000Z");
+    // Hard cutoff: skip tasks created before Feb 1, 2026 (wider window for scoring)
+    const CUTOFF_DATE = new Date("2026-02-01T00:00:00.000Z");
 
     // 5. Process each task
     for (const task of allTasks) {
