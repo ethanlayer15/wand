@@ -761,6 +761,24 @@ function TaskDetailSheet({
     setTitleDraft("");
   };
 
+  // Push-to-Breezeway for Wand-originated tasks (no breezewayTaskId yet)
+  const pushToBreezewayMut = trpc.tasks.pushToBreezeway.useMutation({
+    onSuccess: (data) => {
+      if (data.success) {
+        toast.success(
+          `Pushed to Breezeway${data.breezewayTaskId ? ` (BW #${data.breezewayTaskId})` : ""}`
+        );
+        utils.tasks.list.invalidate();
+        utils.tasks.detail.invalidate({ taskId: task?.id ?? 0 });
+      } else {
+        toast.error(data.error || "Failed to push to Breezeway");
+      }
+    },
+    onError: (err: { message: string }) => {
+      toast.error(`Push failed: ${err.message}`);
+    },
+  });
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-lg p-0">
@@ -768,19 +786,32 @@ function TaskDetailSheet({
           <div className="flex items-center justify-between">
             <SheetTitle className="text-base">Task Detail</SheetTitle>
             {task && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  const url = `${window.location.origin}/task/${task.id}`;
-                  navigator.clipboard.writeText(url);
-                  toast.success("Task link copied to clipboard");
-                }}
-              >
-                <Link className="h-3.5 w-3.5" />
-                Copy Link
-              </Button>
+              <div className="flex items-center gap-1">
+                {!task.breezewayTaskId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5 text-cyan-700 hover:text-cyan-900"
+                    disabled={pushToBreezewayMut.isPending}
+                    onClick={() => pushToBreezewayMut.mutate({ taskId: task.id })}
+                  >
+                    {pushToBreezewayMut.isPending ? "Pushing…" : "Push to Breezeway"}
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    const url = `${window.location.origin}/task/${task.id}`;
+                    navigator.clipboard.writeText(url);
+                    toast.success("Task link copied to clipboard");
+                  }}
+                >
+                  <Link className="h-3.5 w-3.5" />
+                  Copy Link
+                </Button>
+              </div>
             )}
           </div>
           <SheetDescription className="sr-only">
