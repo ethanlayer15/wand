@@ -246,9 +246,11 @@ export async function hasAssignedCleaningTask(
  * Send a Slack notification via incoming webhook.
  */
 export async function sendSlackNotification(message: string): Promise<boolean> {
-  const webhookUrl = ENV.slackWebhookUrl;
+  // Ops alerts (SDT + last-minute changes) go to OPS_SLACK_WEBHOOK_URL if set,
+  // else fall back to the legacy SLACK_WEBHOOK_URL.
+  const webhookUrl = ENV.opsSlackWebhookUrl;
   if (!webhookUrl) {
-    console.warn("[SDT] SLACK_WEBHOOK_URL not configured — skipping notification");
+    console.warn("[SDT] OPS_SLACK_WEBHOOK_URL / SLACK_WEBHOOK_URL not configured — skipping notification");
     return false;
   }
 

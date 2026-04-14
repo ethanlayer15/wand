@@ -29,7 +29,11 @@ export const ENV = {
   quoApiKey: process.env.QUO_API_KEY ?? "",
   quoPhoneNumber: process.env.QUO_PHONE_NUMBER ?? "+18287823571",
   // Slack
+  //  SLACK_WEBHOOK_URL          — legacy / global fallback (cleaning reports with no per-listing webhook, etc.)
+  //  OPS_SLACK_WEBHOOK_URL      — ops alerts: SDT + last-minute reservation changes
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? "",
+  opsSlackWebhookUrl:
+    process.env.OPS_SLACK_WEBHOOK_URL ?? process.env.SLACK_WEBHOOK_URL ?? "",
   // Google OAuth
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
