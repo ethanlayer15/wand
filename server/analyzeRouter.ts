@@ -31,12 +31,18 @@ function normalizeRating(rating: number | null | undefined): number {
   return rating > 5 ? rating / 2 : rating;
 };
 
-// Best-available date for a review: prefer Hostaway's actual submittedAt,
-// fall back to our DB createdAt when Hostaway didn't provide one.
-// Some older synced reviews have null submittedAt; without this fallback
-// they'd silently drop out of every time-based filter (e.g. "This Quarter").
-function reviewDate(r: { submittedAt?: Date | null; createdAt?: Date | null }): Date | null {
-  return r.submittedAt ?? r.createdAt ?? null;
+// Best-available date for a review's time-window filtering. We anchor to the
+// guest's CHECK-OUT date (departureDate) rather than when the review was
+// posted, so time-range selectors reflect the stay window — a late-submitted
+// review doesn't shift an old stay into the current month.
+// Fallback order: departureDate → arrivalDate → submittedAt → createdAt.
+function reviewDate(r: {
+  departureDate?: Date | null;
+  arrivalDate?: Date | null;
+  submittedAt?: Date | null;
+  createdAt?: Date | null;
+}): Date | null {
+  return r.departureDate ?? r.arrivalDate ?? r.submittedAt ?? r.createdAt ?? null;
 }
 
 export const analyzeRouter = router({
@@ -95,8 +101,9 @@ export const analyzeRouter = router({
       timeEnd.setHours(23, 59, 59, 999);
     }
 
-    // Filter reviews — use submittedAt (actual review date) for time filtering,
-    // falling back to createdAt for reviews where Hostaway didn't populate it.
+    // Filter reviews — anchor on guest check-out (departureDate) via reviewDate(),
+    // falling back through arrival/submitted/created. A late-posted review for
+    // a 60-day-old stay does NOT count in the 30-day window.
     // Only count PUBLISHED GUEST-TO-HOST reviews (matches Hostaway dashboard and
     // the filter already applied in Trends/Comparison tabs). Without this, the
     // "30-day review count" was inflated by host-to-guest reviews and drafts.
@@ -432,7 +439,7 @@ export const analyzeRouter = router({
 
       let result = reviewsWithAnalysis as typeof reviewsWithAnalysis;
 
-      // Apply date filters — prefer submittedAt, fall back to createdAt
+      // Apply date filters — anchored on departureDate via reviewDate()
       if (timeCutoff) {
         result = result.filter((r) => {
           const d = reviewDate(r as any);
@@ -498,7 +505,7 @@ export const analyzeRouter = router({
       reviews = reviews.filter((r) => filteredListingIds!.has(r.listingId));
       analyses = analyses.filter((a) => filteredListingIds!.has(a.listingId));
     }
-    // Time filter — prefer submittedAt, fall back to createdAt
+    // Time filter — anchored on departureDate via reviewDate()
     if (timeCutoff) {
       reviews = reviews.filter((r) => {
         const d = reviewDate(r);
@@ -614,7 +621,7 @@ export const analyzeRouter = router({
         reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => podListingIds.has(r.listingId));
       }
 
-      // Apply date filters — prefer submittedAt, fall back to createdAt
+      // Apply date filters — anchored on departureDate via reviewDate()
       if (input.timeRange && input.timeRange !== "all") {
         let timeCutoff: Date | null = null;
         const now = new Date();

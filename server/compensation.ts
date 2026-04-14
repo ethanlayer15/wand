@@ -14,7 +14,7 @@
  * New cleaners default to 1.0x until they establish a 30-day score history.
  */
 
-import { eq, sql, and, gte, lte } from "drizzle-orm";
+import { eq, sql, and, or, gte, lte, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   cleaners,
@@ -161,7 +161,12 @@ export async function calculateCleanerRollingScore(cleanerName: string, cleanerI
     cleansByListing.set(clean.listingId, existing);
   }
 
-  // Get reviews from the last 30 days for properties this cleaner has cleaned
+  // Get reviews from the last 30 days for properties this cleaner has cleaned.
+  // Anchor the window on the guest's CHECK-OUT date (departureDate) so a
+  // late-posted review for a 60-day-old stay does not count toward the
+  // cleaner's current rolling score. For older rows where Hostaway never
+  // populated departureDate, fall back to submittedAt to avoid silently
+  // dropping them.
   const listingIds = [...cleansByListing.keys()];
   if (listingIds.length === 0) {
     return { score: null, reviewCount: 0, multiplier: 1.0 };
@@ -169,7 +174,15 @@ export async function calculateCleanerRollingScore(cleanerName: string, cleanerI
 
   const recentReviews = await db.select()
     .from(reviews)
-    .where(gte(reviews.submittedAt, thirtyDaysAgo));
+    .where(
+      or(
+        gte(reviews.departureDate, thirtyDaysAgo),
+        and(
+          isNull(reviews.departureDate),
+          gte(reviews.submittedAt, thirtyDaysAgo)
+        )
+      )
+    );
 
   // Get AI analyses for cleaning issue detection (for non-Airbnb reviews)
   const allAnalyses = await db.select().from(reviewAnalysis);
