@@ -97,7 +97,14 @@ export const analyzeRouter = router({
 
     // Filter reviews — use submittedAt (actual review date) for time filtering,
     // falling back to createdAt for reviews where Hostaway didn't populate it.
-    let reviews = allReviews;
+    // Only count PUBLISHED GUEST-TO-HOST reviews (matches Hostaway dashboard and
+    // the filter already applied in Trends/Comparison tabs). Without this, the
+    // "30-day review count" was inflated by host-to-guest reviews and drafts.
+    let reviews = allReviews.filter(
+      (r) =>
+        (r.reviewStatus === "published" || r.reviewStatus == null) &&
+        (r.reviewType === "guest-to-host" || r.reviewType == null)
+    );
     if (filteredListingIds) {
       reviews = reviews.filter((r) => filteredListingIds!.has(r.listingId));
     }
