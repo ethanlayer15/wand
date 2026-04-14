@@ -498,31 +498,120 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
               </Card>
             ) : (
               <div className="space-y-3">
-                {reviews.reviews.map((review: any) => (
-                  <Card key={review.id} className="bg-emerald-900/30 border-emerald-700/50">
-                    <CardContent className="py-4">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <p className="text-white text-sm font-medium">{review.propertyName}</p>
-                          <p className="text-emerald-500 text-xs">
-                            {review.guestName} · {review.reviewDate ? formatDate(review.reviewDate) : ""}
-                          </p>
+                {reviews.reviews.map((review: any) => {
+                  const score = Number(review.scoreUsed ?? 0);
+                  const scoreColor =
+                    score >= 4.9
+                      ? "bg-emerald-700 text-white"
+                      : score >= 4.7
+                      ? "bg-emerald-800 text-emerald-100"
+                      : score >= 4.0
+                      ? "bg-amber-700 text-amber-50"
+                      : "bg-red-800 text-red-50";
+                  const sourceColor =
+                    review.source === "airbnb"
+                      ? "bg-rose-900/50 text-rose-300 border-rose-700/50"
+                      : review.source === "vrbo"
+                      ? "bg-sky-900/50 text-sky-300 border-sky-700/50"
+                      : "bg-emerald-900/50 text-emerald-300 border-emerald-700/50";
+                  return (
+                    <Card key={review.id} className="bg-emerald-900/30 border-emerald-700/50">
+                      <CardContent className="py-4 space-y-2">
+                        {/* Top row: source + property + score */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] uppercase ${sourceColor}`}
+                            >
+                              {review.source}
+                            </Badge>
+                            <span className="text-white text-sm font-medium truncate">
+                              {review.propertyName}
+                            </span>
+                          </div>
+                          {review.scoreUsed != null && (
+                            <span
+                              className={`text-sm font-bold px-2 py-0.5 rounded ${scoreColor}`}
+                            >
+                              {Number(review.scoreUsed).toFixed(1)}
+                            </span>
+                          )}
                         </div>
-                        {review.rating != null && (
-                          <div className="flex items-center gap-1">
-                            <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
-                            <span className="text-white font-semibold text-sm">{Number(review.rating).toFixed(1)}</span>
+
+                        {/* Ratings row */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-emerald-400">
+                          {review.cleanlinessRating != null && (
+                            <span>
+                              Cleanliness:{" "}
+                              <strong className="text-emerald-200">
+                                {review.cleanlinessRating}
+                              </strong>
+                              /5
+                            </span>
+                          )}
+                          {review.rating != null && (
+                            <span>
+                              Overall:{" "}
+                              <strong className="text-emerald-200">{review.rating}</strong>
+                            </span>
+                          )}
+                          {review.scoreReason && (
+                            <span className="italic text-[10px] text-emerald-500">
+                              {review.scoreReason}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Dates */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-emerald-500">
+                          {review.arrivalDate && <span>Guest arrival: {review.arrivalDate}</span>}
+                          {review.submittedAt && <span>Reviewed: {review.submittedAt}</span>}
+                          {review.matchedCleanDate && (
+                            <span className="text-indigo-300">
+                              Matched clean: {review.matchedCleanDate}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Public review */}
+                        {review.publicReview && (
+                          <div className="rounded-md bg-emerald-800/30 border border-emerald-700/40 p-2.5">
+                            <p className="text-[10px] font-medium text-emerald-400 uppercase tracking-wide mb-1">
+                              Public Review
+                            </p>
+                            <p className="text-xs text-emerald-100 leading-relaxed whitespace-pre-line">
+                              {review.publicReview}
+                            </p>
                           </div>
                         )}
-                      </div>
-                      {review.excerpt && (
-                        <p className="text-emerald-300 text-xs leading-relaxed mt-2 bg-emerald-800/20 rounded p-2">
-                          {review.excerpt}
-                        </p>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
+
+                        {/* Private feedback */}
+                        {review.privateFeedback && (
+                          <div className="rounded-md bg-amber-900/20 border border-amber-700/40 p-2.5">
+                            <p className="text-[10px] font-medium text-amber-300 uppercase tracking-wide mb-1">
+                              Private Feedback
+                            </p>
+                            <p className="text-xs text-amber-50 leading-relaxed whitespace-pre-line">
+                              {review.privateFeedback}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* AI summary (if no public/private text) */}
+                        {!review.publicReview && !review.privateFeedback && review.excerpt && (
+                          <p className="text-emerald-300 text-xs leading-relaxed bg-emerald-800/20 rounded p-2">
+                            {review.excerpt}
+                          </p>
+                        )}
+
+                        {review.guestName && (
+                          <p className="text-[10px] text-emerald-500">— {review.guestName}</p>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </TabsContent>

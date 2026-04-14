@@ -20,6 +20,7 @@ import {
 } from "../drizzle/schema";
 import { eq, and, desc, gte, sql } from "drizzle-orm";
 import { getMultiplierTier, DEFAULT_MULTIPLIER_TIERS } from "./compensationConfig";
+import { isScorableClean } from "./compensation";
 import { storagePut } from "./storage";
 
 export const cleanerDashboardRouter = router({
@@ -51,7 +52,11 @@ export const cleanerDashboardRouter = router({
 
   /**
    * Get reviews for a cleaner (public — token-based).
-   * Shows cleaning sub-score from review analyses.
+   *
+   * Matches this cleaner's completed cleans to guest reviews on the same
+   * listing within a ±1..3 day window (same logic as the admin
+   * compensation.scoreDetail endpoint) so the cleaner sees an identical
+   * review roll-up to what admins see.
    */
   reviews: publicProcedure
     .input(
@@ -61,94 +66,166 @@ export const cleanerDashboardRouter = router({
       })
     )
     .query(async ({ input }) => {
+      const empty = { reviews: [] as any[], averageScore: null as number | null, reviewCount: 0 };
       const cleaner = await getCleanerByToken(input.token);
-      if (!cleaner) return { reviews: [], averageScore: null, reviewCount: 0 };
+      if (!cleaner) return empty;
 
       const db = await getDb();
-      if (!db) return { reviews: [], averageScore: null, reviewCount: 0 };
+      if (!db) return empty;
 
-      // Calculate date cutoff based on period
+      // Review cutoff (based on submittedAt) and a wider cleans cutoff so
+      // recent reviews can match cleans performed slightly before cutoff.
       const now = new Date();
-      let cutoff: Date | null = null;
+      let reviewCutoff: Date | null = null;
       switch (input.period) {
         case "week":
-          cutoff = new Date(now);
-          cutoff.setDate(cutoff.getDate() - 7);
+          reviewCutoff = new Date(now);
+          reviewCutoff.setDate(reviewCutoff.getDate() - 7);
           break;
         case "month":
-          cutoff = new Date(now);
-          cutoff.setDate(cutoff.getDate() - 30);
+          reviewCutoff = new Date(now);
+          reviewCutoff.setDate(reviewCutoff.getDate() - 30);
           break;
         case "year":
-          cutoff = new Date(now);
-          cutoff.setFullYear(cutoff.getFullYear() - 1);
+          reviewCutoff = new Date(now);
+          reviewCutoff.setFullYear(reviewCutoff.getFullYear() - 1);
           break;
         case "all":
-          cutoff = null;
+          reviewCutoff = null;
           break;
       }
+      const cleansCutoff = reviewCutoff ? new Date(reviewCutoff) : null;
+      if (cleansCutoff) cleansCutoff.setDate(cleansCutoff.getDate() - 15);
 
-      // Get all review analyses mentioning this cleaner
-      const allAnalyses = await db.select().from(reviewAnalysis);
-      const allReviews = await db.select().from(reviews);
       const { listings } = await import("../drizzle/schema");
-      const allListings = await db.select().from(listings);
 
-      const reviewMap = new Map(allReviews.map((r) => [r.id, r]));
+      // Cleaner's cleans (scorable only)
+      const cleanerCleans = cleansCutoff
+        ? await db.select().from(completedCleans).where(
+            and(
+              eq(completedCleans.cleanerId, cleaner.id),
+              gte(completedCleans.scheduledDate, cleansCutoff)
+            )
+          )
+        : await db.select().from(completedCleans).where(eq(completedCleans.cleanerId, cleaner.id));
+
+      const cleansByListing = new Map<number, { date: Date; title: string }[]>();
+      for (const c of cleanerCleans) {
+        if (!c.listingId || !c.scheduledDate) continue;
+        if (!isScorableClean(c.taskTitle)) continue;
+        const arr = cleansByListing.get(c.listingId) || [];
+        arr.push({ date: new Date(c.scheduledDate), title: c.taskTitle || "" });
+        cleansByListing.set(c.listingId, arr);
+      }
+
+      const relevantReviews = reviewCutoff
+        ? await db.select().from(reviews).where(gte(reviews.submittedAt, reviewCutoff))
+        : await db.select().from(reviews);
+
+      const allAnalyses = await db.select().from(reviewAnalysis);
+      const analysisMap = new Map(allAnalyses.map((a: any) => [a.reviewId, a]));
+
+      const allListings = await db.select().from(listings);
       const listingMap = new Map(allListings.map((l) => [l.id, l]));
 
-      const relevantAnalyses = allAnalyses.filter((a) => {
-        if (!a.cleanerMentioned) return false;
-        if (a.cleanerMentioned.toLowerCase() !== cleaner.name.toLowerCase()) return false;
-        if (cutoff) {
-          const review = reviewMap.get(a.reviewId);
-          if (!review) return false;
-          const reviewDate = review.submittedAt ?? review.createdAt;
-          return reviewDate >= cutoff;
-        }
-        return true;
-      });
+      const matched: Array<{
+        id: number;
+        propertyName: string;
+        source: string;
+        rating: number | null;
+        cleanlinessRating: number | null;
+        scoreUsed: number;
+        scoreReason: string;
+        guestName: string;
+        publicReview: string | null;
+        privateFeedback: string | null;
+        arrivalDate: string | null;
+        submittedAt: string | null;
+        reviewDate: Date | null;
+        matchedCleanDate: string | null;
+        excerpt: string | null;
+      }> = [];
 
-      // Build review list with cleaning scores
-      const reviewList = relevantAnalyses
-        .map((a) => {
-          const review = reviewMap.get(a.reviewId);
-          if (!review) return null;
-          const rating = review.rating
-            ? review.rating > 5
-              ? review.rating / 2
-              : review.rating
-            : null;
-          return {
-            id: review.id,
-            propertyName: listingMap.get(review.listingId)?.internalName ?? listingMap.get(review.listingId)?.name ?? `Property #${review.listingId}`,
-            rating,
-            reviewDate: review.submittedAt ?? review.createdAt,
-            guestName: review.guestName ?? "Guest",
-            // Show AI summary as excerpt
-            excerpt: a.summary ?? null,
-          };
-        })
-        .filter(Boolean)
-        .sort((a, b) => {
-          const da = a!.reviewDate?.getTime() ?? 0;
-          const db = b!.reviewDate?.getTime() ?? 0;
-          return db - da;
+      for (const review of relevantReviews) {
+        if (!review.listingId) continue;
+        const cleanEntries = cleansByListing.get(review.listingId);
+        if (!cleanEntries) continue;
+
+        const reviewDate = review.arrivalDate || review.submittedAt;
+        if (!reviewDate) continue;
+
+        let matchedClean = cleanEntries.find((c) => {
+          const diff = (reviewDate.getTime() - c.date.getTime()) / (1000 * 60 * 60 * 24);
+          return diff >= -1 && diff <= 3;
         });
+        if (!matchedClean) {
+          const before = cleanEntries
+            .filter((c) => c.date.getTime() <= reviewDate.getTime())
+            .sort((a, b) => b.date.getTime() - a.date.getTime());
+          matchedClean = before[0] ?? undefined;
+        }
+        if (!matchedClean) continue;
 
-      // Calculate average score
-      const scores = reviewList
-        .map((r) => r!.rating)
-        .filter((s): s is number => s !== null);
+        const isAirbnb = review.source === "airbnb";
+        let scoreUsed: number | null = null;
+        let scoreReason = "";
+        if (isAirbnb && review.cleanlinessRating) {
+          scoreUsed = review.cleanlinessRating;
+          scoreReason = "Airbnb cleanliness sub-score";
+        } else if (!isAirbnb) {
+          const analysis: any = analysisMap.get(review.id);
+          const hasCleaningIssue = analysis?.issues?.some((i: any) => i.type === "cleaning") ?? false;
+          if (hasCleaningIssue) {
+            scoreUsed = review.rating ? (review.rating > 5 ? review.rating / 2 : review.rating) : 3;
+            scoreReason = "Cleaning issue detected — used overall rating";
+          } else {
+            scoreUsed = 5;
+            scoreReason = "No cleaning issues — default 5";
+          }
+        } else if (isAirbnb && !review.cleanlinessRating) {
+          const analysis: any = analysisMap.get(review.id);
+          const hasCleaningIssue = analysis?.issues?.some((i: any) => i.type === "cleaning") ?? false;
+          if (hasCleaningIssue) {
+            scoreUsed = review.rating ? (review.rating > 5 ? review.rating / 2 : review.rating) : 3;
+            scoreReason = "Airbnb (no sub-score) — cleaning issue detected";
+          } else {
+            scoreUsed = 5;
+            scoreReason = "Airbnb (no sub-score) — no issues";
+          }
+        }
+        if (scoreUsed === null) continue;
+
+        const listing = listingMap.get(review.listingId);
+        const analysis: any = analysisMap.get(review.id);
+        matched.push({
+          id: review.id,
+          propertyName: listing?.internalName || listing?.name || `Property #${review.listingId}`,
+          source: review.source || "unknown",
+          rating: review.rating,
+          cleanlinessRating: review.cleanlinessRating,
+          scoreUsed,
+          scoreReason,
+          guestName: review.guestName ?? "Guest",
+          publicReview: review.publicReview || null,
+          privateFeedback: review.privateFeedback || null,
+          arrivalDate: review.arrivalDate?.toISOString().slice(0, 10) ?? null,
+          submittedAt: review.submittedAt?.toISOString().slice(0, 10) ?? null,
+          reviewDate: review.submittedAt ?? review.createdAt ?? null,
+          matchedCleanDate: matchedClean.date.toISOString().slice(0, 10),
+          excerpt: analysis?.summary ?? null,
+        });
+      }
+
+      matched.sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
+
+      const scores = matched.map((r) => r.scoreUsed);
       const averageScore =
-        scores.length > 0
-          ? Number((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2))
-          : null;
+        scores.length > 0 ? Number((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2)) : null;
 
       return {
-        reviews: reviewList,
+        reviews: matched,
         averageScore,
-        reviewCount: scores.length,
+        reviewCount: matched.length,
       };
     }),
 
