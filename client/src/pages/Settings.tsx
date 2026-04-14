@@ -196,6 +196,27 @@ export default function Settings() {
     },
   });
 
+  const triggerLastMinuteMutation = trpc.integrations.triggerLastMinuteCheck.useMutation({
+    onSuccess: (data) => {
+      const summary = data.changes.length > 0
+        ? data.changes
+            .slice(0, 3)
+            .map((c) => `${c.type}: ${c.propertyName}`)
+            .join(" · ") + (data.changes.length > 3 ? ` · +${data.changes.length - 3} more` : "")
+        : "no changes";
+      toast.success(
+        `Last-minute check: ${data.reservationsFetched} reservations, ${data.changesDetected} changes — ${summary}${
+          data.notified ? " · Slack notified" : ""
+        }`
+      );
+      setSyncInProgress(null);
+    },
+    onError: (err) => {
+      toast.error(`Last-minute check failed: ${err.message}`);
+      setSyncInProgress(null);
+    },
+  });
+
   const handleSync = (type: string) => {
     setSyncInProgress(type);
     switch (type) {
@@ -227,6 +248,9 @@ export default function Settings() {
         break;
       case "sdt-check":
         triggerSdtMutation.mutate();
+        break;
+      case "last-minute-check":
+        triggerLastMinuteMutation.mutate();
         break;
     }
   };
@@ -337,6 +361,11 @@ export default function Settings() {
           label: "Trigger SDT Check",
           onClick: () => handleSync("sdt-check"),
           loading: syncInProgress === "sdt-check",
+        },
+        {
+          label: "Trigger Last-Minute Check",
+          onClick: () => handleSync("last-minute-check"),
+          loading: syncInProgress === "last-minute-check",
         },
       ],
     },
