@@ -297,6 +297,10 @@ export const customerMapping = mysqlTable("customerMapping", {
   preferredBillingMethod: mysqlEnum("preferredBillingMethod", ["card_on_file", "invoice", "ask_each_time"])
     .default("ask_each_time")
     .notNull(),
+  // Owner-level Slack webhook for cleaning reports. Used as a fallback when
+  // listings.cleaningReportSlackWebhook is null so an owner with multiple
+  // properties only needs to configure the channel once.
+  cleaningReportSlackWebhook: text("cleaningReportSlackWebhook"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

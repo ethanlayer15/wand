@@ -12,8 +12,37 @@ import {
   cleaningReportsSent,
   completedCleans,
   listings,
+  customerMapping,
 } from "../drizzle/schema";
 import { eq, inArray } from "drizzle-orm";
+
+/**
+ * Resolve the Slack webhook for a listing.
+ * Lookup order: listing.cleaningReportSlackWebhook → owner (customerMapping,
+ * matched on breezewayPropertyId) → null.
+ * This implements "option A": per-customer fallback with a per-listing override.
+ */
+async function resolveSlackWebhookForListing(listingId: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({
+      breezewayPropertyId: listings.breezewayPropertyId,
+      listingWebhook: listings.cleaningReportSlackWebhook,
+    })
+    .from(listings)
+    .where(eq(listings.id, listingId))
+    .limit(1);
+  if (!row) return null;
+  if (row.listingWebhook) return row.listingWebhook;
+  if (!row.breezewayPropertyId) return null;
+  const [owner] = await db
+    .select({ webhook: customerMapping.cleaningReportSlackWebhook })
+    .from(customerMapping)
+    .where(eq(customerMapping.breezewayOwnerId, row.breezewayPropertyId))
+    .limit(1);
+  return owner?.webhook ?? null;
+}
 
 // ── SMS Content ────────────────────────────────────────────────────
 
@@ -106,17 +135,20 @@ async function sendCleaningReport(clean: {
     return;
   }
 
-  // Get recipients
+  // Get recipients (SMS) and resolve Slack webhook (listing or owner-level).
   const recipients = await getRecipientsForListing(clean.listingId);
+  const slackWebhook = await resolveSlackWebhookForListing(clean.listingId);
 
-  if (recipients.length === 0) {
+  // Nothing to do if there's no delivery channel at all — record and exit so
+  // we don't retry forever.
+  if (recipients.length === 0 && !slackWebhook) {
     await db.insert(cleaningReportsSent).values({
       completedCleanId: clean.id,
       breezewayTaskId: clean.breezewayTaskId,
       recipientPhoneNumbers: "[]",
       status: "no_recipients",
     });
-    console.log(`[CleaningReports] No recipients for listing ${clean.listingId} (${clean.propertyName})`);
+    console.log(`[CleaningReports] No SMS recipients and no Slack webhook for listing ${clean.listingId} (${clean.propertyName})`);
     return;
   }
 
@@ -128,47 +160,59 @@ async function sendCleaningReport(clean: {
     reportUrl: clean.reportUrl,
   });
 
-  try {
-    // Send SMS to phone recipients
-    for (const recipient of recipients) {
-      await sendSms({ to: recipient.phoneNumber, content });
-    }
+  // Track delivery outcome across channels independently so a Slack failure
+  // doesn't mask a successful SMS and vice versa.
+  let smsSentTo: string[] = [];
+  let smsError: string | null = null;
+  let slackOk = false;
+  let slackError: string | null = null;
 
-    // Send to Slack if configured for this property
-    const [listing] = await db
-      .select({ slackWebhook: listings.cleaningReportSlackWebhook })
-      .from(listings)
-      .where(eq(listings.id, clean.listingId))
-      .limit(1);
-
-    if (listing?.slackWebhook) {
-      try {
-        await postCleaningReportToSlack(listing.slackWebhook, content);
-        console.log(`[CleaningReports] Slack notification sent for ${propertyName}`);
-      } catch (slackErr: any) {
-        console.error(`[CleaningReports] Slack failed for ${propertyName}:`, slackErr.message);
+  if (recipients.length > 0) {
+    try {
+      for (const recipient of recipients) {
+        await sendSms({ to: recipient.phoneNumber, content });
+        smsSentTo.push(recipient.phoneNumber);
       }
+    } catch (err: any) {
+      smsError = err.message?.slice(0, 500) ?? "sms failed";
+      console.error(`[CleaningReports] SMS failed for ${clean.breezewayTaskId}:`, err.message);
     }
+  }
 
-    await db.insert(cleaningReportsSent).values({
+  if (slackWebhook) {
+    try {
+      await postCleaningReportToSlack(slackWebhook, content);
+      slackOk = true;
+      console.log(`[CleaningReports] Slack notification sent for ${propertyName}`);
+    } catch (slackErr: any) {
+      slackError = slackErr.message?.slice(0, 500) ?? "slack failed";
+      console.error(`[CleaningReports] Slack failed for ${propertyName}:`, slackErr.message);
+    }
+  }
+
+  // Consider the report "sent" if at least one channel succeeded.
+  const anySuccess = smsSentTo.length > 0 || slackOk;
+  const status: "sent" | "failed" = anySuccess ? "sent" : "failed";
+  const errorMessage = [smsError && `sms: ${smsError}`, slackError && `slack: ${slackError}`]
+    .filter(Boolean)
+    .join(" | ") || null;
+
+  await db
+    .insert(cleaningReportsSent)
+    .values({
       completedCleanId: clean.id,
       breezewayTaskId: clean.breezewayTaskId,
-      recipientPhoneNumbers: JSON.stringify(recipients.map((r) => r.phoneNumber)),
-      status: "sent",
-    });
+      recipientPhoneNumbers: JSON.stringify(smsSentTo),
+      status,
+      errorMessage,
+    })
+    .catch(() => {});
 
-    const toNumbers = recipients.map((r) => r.phoneNumber).join(", ");
-    console.log(`[CleaningReports] Sent SMS for ${propertyName} to ${toNumbers}`);
-  } catch (err: any) {
-    console.error(`[CleaningReports] Failed to send SMS for ${clean.breezewayTaskId}:`, err.message);
-
-    await db.insert(cleaningReportsSent).values({
-      completedCleanId: clean.id,
-      breezewayTaskId: clean.breezewayTaskId,
-      recipientPhoneNumbers: JSON.stringify(recipients.map((r) => r.phoneNumber)),
-      status: "failed",
-      errorMessage: err.message?.slice(0, 500),
-    }).catch(() => {}); // don't fail on audit insert
+  if (anySuccess) {
+    const parts: string[] = [];
+    if (smsSentTo.length) parts.push(`SMS → ${smsSentTo.join(", ")}`);
+    if (slackOk) parts.push("Slack → ok");
+    console.log(`[CleaningReports] ${propertyName}: ${parts.join(" · ")}`);
   }
 }
 

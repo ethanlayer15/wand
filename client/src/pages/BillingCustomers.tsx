@@ -459,6 +459,14 @@ export default function BillingCustomers() {
     onError: (err) => toast.error(err.message),
   });
 
+  const setSlackMutation = trpc.billing.customerMappings.setSlackWebhook.useMutation({
+    onSuccess: () => {
+      utils.billing.customerMappings.list.invalidate();
+      toast.success("Cleaning report webhook saved");
+    },
+    onError: (err) => toast.error(`Save failed: ${err.message}`),
+  });
+
   // Mutation for auto-map confirmations
   const autoMapConfirmMutation = trpc.billing.customerMappings.upsert.useMutation({
     onSuccess: () => {
@@ -631,7 +639,7 @@ export default function BillingCustomers() {
         <div className="space-y-3">
           {mappings.map((m) => (
             <Card key={m.id}>
-              <CardContent className="py-4">
+              <CardContent className="py-4 space-y-3">
                 <div className="flex items-center justify-between gap-4">
                   {/* Left: Breezeway property */}
                   <div className="flex items-center gap-3 min-w-0">
@@ -694,6 +702,19 @@ export default function BillingCustomers() {
                     </Button>
                   </div>
                 </div>
+
+                {/* Cleaning report Slack webhook — owner-level default */}
+                <CustomerSlackWebhookRow
+                  mappingId={m.id}
+                  initial={(m as any).cleaningReportSlackWebhook ?? ""}
+                  onSave={(url) =>
+                    setSlackMutation.mutate({
+                      id: m.id,
+                      webhookUrl: url.trim() === "" ? null : url.trim(),
+                    })
+                  }
+                  saving={setSlackMutation.isPending}
+                />
               </CardContent>
             </Card>
           ))}
@@ -825,6 +846,46 @@ export default function BillingCustomers() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ─── Owner-level cleaning-report Slack webhook row ──────────────────────────
+
+function CustomerSlackWebhookRow({
+  mappingId: _mappingId,
+  initial,
+  onSave,
+  saving,
+}: {
+  mappingId: number;
+  initial: string;
+  onSave: (url: string) => void;
+  saving: boolean;
+}) {
+  const [value, setValue] = useState(initial);
+  const dirty = value.trim() !== (initial ?? "").trim();
+  return (
+    <div className="flex items-center gap-2 pt-3 border-t">
+      <div className="shrink-0 text-xs text-muted-foreground w-[168px]">
+        Cleaning report Slack webhook
+      </div>
+      <Input
+        type="url"
+        placeholder="https://hooks.slack.com/services/…  (optional — used for all this customer's listings)"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="h-8 text-xs font-mono"
+      />
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-8 px-3 text-xs shrink-0"
+        disabled={!dirty || saving}
+        onClick={() => onSave(value)}
+      >
+        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+      </Button>
     </div>
   );
 }

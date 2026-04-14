@@ -76,6 +76,28 @@ export const billingRouter = router({
         await db.delete(customerMapping).where(eq(customerMapping.id, input.id));
         return { success: true };
       }),
+
+    /**
+     * Set or clear the owner-level cleaning-report Slack webhook.
+     * Applies to every listing under this customer unless the listing has
+     * its own cleaningReportSlackWebhook override.
+     */
+    setSlackWebhook: managerProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          webhookUrl: z.string().url().nullable(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+        await db
+          .update(customerMapping)
+          .set({ cleaningReportSlackWebhook: input.webhookUrl })
+          .where(eq(customerMapping.id, input.id));
+        return { success: true };
+      }),
   }),
 
   // ── Breezeway Properties (for owner dropdown) ───────────────────────
