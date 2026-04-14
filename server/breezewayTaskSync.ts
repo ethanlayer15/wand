@@ -70,14 +70,70 @@ export async function deactivateBreezewayTaskSync(): Promise<void> {
   await updateBreezewaySyncConfig({ enabled: false });
 }
 
-export async function closeBreezewayTask(taskId: number): Promise<void> {
+export async function closeBreezewayTask(
+  taskId: number | string,
+  _wandTaskId?: number
+): Promise<void> {
   const client = createBreezewayClient();
   await client.patch(`/task/${taskId}/`, { type_task_status: { stage: "completed" } });
 }
 
-export async function reopenBreezewayTask(taskId: number): Promise<void> {
+export async function reopenBreezewayTask(
+  taskId: number | string,
+  _wandTaskId?: number
+): Promise<void> {
   const client = createBreezewayClient();
   await client.patch(`/task/${taskId}/`, { type_task_status: { stage: "open" } });
+}
+
+/**
+ * Post a comment/note on a Breezeway task.
+ * Breezeway task comments endpoint: POST /task/{id}/comment/
+ */
+export async function commentBreezewayTask(
+  taskId: number | string,
+  body: string
+): Promise<{ id: number } | null> {
+  try {
+    const client = createBreezewayClient();
+    const res = await client.post<{ id: number }>(
+      `/task/${taskId}/comment/`,
+      { body }
+    );
+    return res;
+  } catch (err: any) {
+    console.error(
+      `[BreezewayTaskSync] commentBreezewayTask(${taskId}) failed:`,
+      err?.message
+    );
+    return null;
+  }
+}
+
+/**
+ * Close a Breezeway task with a trailing comment — used when a Wand task is
+ * moved to "Ideas for later".
+ */
+export async function closeBreezewayTaskWithComment(
+  taskId: number | string,
+  comment: string
+): Promise<void> {
+  await commentBreezewayTask(taskId, comment);
+  const client = createBreezewayClient();
+  await client.patch(`/task/${taskId}/`, {
+    type_task_status: { stage: "completed" },
+  });
+}
+
+/**
+ * Hard-delete a Breezeway task — used only for user-confirmed "Ignore".
+ * Bypasses the BreezewayClient generic DELETE block.
+ */
+export async function deleteBreezewayTask(
+  taskId: number | string
+): Promise<void> {
+  const client = createBreezewayClient();
+  await client.deleteTask(taskId);
 }
 
 export async function pollBreezewayTasks(): Promise<SyncResult> {

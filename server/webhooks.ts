@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { logBreezewayAudit, upsertBreezewayProperty, upsertGuestMessage, getListingByHostawayId } from "./db";
+import { logBreezewayAudit, upsertBreezewayProperty, upsertGuestMessage, getListingByHostawayId, getTaskByBreezewayId, updateTaskStatus, addTaskComment, hideBreezewayTask } from "./db";
 
 const webhookRouter = Router();
 
@@ -51,21 +51,53 @@ webhookRouter.post("/breezeway", async (req, res) => {
         console.log("[Webhook] Task committed:", data?.id);
         break;
 
-      case "task-updated":
+      case "task-updated": {
         console.log("[Webhook] Task updated:", data?.id);
+        // Mirror stage changes from Breezeway back to Wand
+        const stage = data?.type_task_status?.stage || data?.status;
+        if (data?.id && stage) {
+          const wand = await getTaskByBreezewayId(String(data.id));
+          if (wand && !wand.statusOverridden) {
+            const map: Record<string, string> = {
+              open: "created",
+              committed: "up_next",
+              in_progress: "in_progress",
+              completed: "completed",
+              paused: "in_progress",
+            };
+            const nextStatus = map[stage];
+            if (nextStatus && nextStatus !== wand.status) {
+              await updateTaskStatus(wand.id, nextStatus as any);
+            }
+          }
+        }
         break;
+      }
 
-      case "task-deleted":
+      case "task-deleted": {
         console.log("[Webhook] Task deleted:", data?.id);
+        if (data?.id) {
+          // Breezeway-side delete → hide from Wand board (don't hard-delete,
+          // keep audit trail locally).
+          await hideBreezewayTask(String(data.id));
+        }
         break;
+      }
 
       case "task-assignment-updated":
         console.log("[Webhook] Task assignment updated:", data?.id);
         break;
 
-      case "task-started":
+      case "task-started": {
         console.log("[Webhook] Task started:", data?.id);
+        if (data?.id) {
+          const wand = await getTaskByBreezewayId(String(data.id));
+          if (wand && !wand.statusOverridden && wand.status !== "in_progress") {
+            await updateTaskStatus(wand.id, "in_progress");
+          }
+        }
         break;
+      }
 
       case "task-paused":
         console.log("[Webhook] Task paused:", data?.id);
@@ -75,9 +107,16 @@ webhookRouter.post("/breezeway", async (req, res) => {
         console.log("[Webhook] Task resumed:", data?.id);
         break;
 
-      case "task-completed":
+      case "task-completed": {
         console.log("[Webhook] Task completed:", data?.id);
+        if (data?.id) {
+          const wand = await getTaskByBreezewayId(String(data.id));
+          if (wand && !wand.statusOverridden && wand.status !== "completed") {
+            await updateTaskStatus(wand.id, "completed");
+          }
+        }
         break;
+      }
 
       case "task-cost-updated":
         console.log("[Webhook] Task cost updated:", data?.id);
@@ -87,9 +126,30 @@ webhookRouter.post("/breezeway", async (req, res) => {
         console.log("[Webhook] Task supplies updated:", data?.id);
         break;
 
-      case "task-comment-created":
+      case "task-comment-created": {
         console.log("[Webhook] Task comment created:", data?.id);
+        // data shape (assumed): { id, task_id, body, author: { name } }
+        const bwTaskId = data?.task_id ?? data?.task?.id;
+        const body = data?.body ?? data?.content;
+        if (bwTaskId && body) {
+          // Skip echoes of Wand-originated comments (we prefix them with "[Wand ·")
+          if (typeof body === "string" && body.startsWith("[Wand ·")) {
+            console.log("[Webhook] Skipping echo of Wand-originated BW comment");
+            break;
+          }
+          const wand = await getTaskByBreezewayId(String(bwTaskId));
+          if (wand) {
+            const who = data?.author?.name || data?.user?.name || "Breezeway";
+            await addTaskComment({
+              taskId: wand.id,
+              userId: 0, // system user; acceptable for sync-origin comments
+              userName: `Breezeway · ${who}`,
+              content: String(body).slice(0, 5000),
+            });
+          }
+        }
         break;
+      }
 
       // Property status events
       case "property-status":

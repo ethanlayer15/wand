@@ -579,15 +579,37 @@ export async function pushTaskToBreezeway(
       .limit(1);
 
     if (listing) {
-      // Try to find matching Breezeway property by name
       const { breezewayProperties } = await import("../drizzle/schema");
-      const bwProps = await db
-        .select()
-        .from(breezewayProperties)
-        .where(eq(breezewayProperties.name, listing.name as string));
 
-      if (bwProps.length > 0) {
-        breezewayHomeId = parseInt(bwProps[0].breezewayId, 10);
+      // 1) Direct link on listing (best, explicit mapping)
+      if (listing.breezewayPropertyId) {
+        breezewayHomeId = parseInt(listing.breezewayPropertyId, 10);
+      }
+
+      // 2) Join via referencePropertyId === hostawayId (robust across rename)
+      if (!breezewayHomeId && listing.hostawayId) {
+        const byRef = await db
+          .select()
+          .from(breezewayProperties)
+          .where(
+            eq(breezewayProperties.referencePropertyId, listing.hostawayId)
+          )
+          .limit(1);
+        if (byRef.length > 0) {
+          breezewayHomeId = parseInt(byRef[0].breezewayId, 10);
+        }
+      }
+
+      // 3) Fallback: exact name match
+      if (!breezewayHomeId && listing.name) {
+        const byName = await db
+          .select()
+          .from(breezewayProperties)
+          .where(eq(breezewayProperties.name, listing.name as string))
+          .limit(1);
+        if (byName.length > 0) {
+          breezewayHomeId = parseInt(byName[0].breezewayId, 10);
+        }
       }
     }
   }

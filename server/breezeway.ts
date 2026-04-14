@@ -438,6 +438,46 @@ export class BreezewayClient {
   }
 
   /**
+   * Hard-delete a Breezeway TASK. This bypasses the generic DELETE block and
+   * is the only whitelisted destructive action — used for user-confirmed
+   * "Ignore" in Wand. Properties, reservations, etc. stay blocked.
+   */
+  async deleteTask(taskId: number | string): Promise<void> {
+    const token = await this.ensureValidToken();
+    const endpoint = `/task/${taskId}/`;
+    const startTime = Date.now();
+    const response = await fetch(`${BREEZEWAY_API_BASE}${endpoint}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `JWT ${token}`,
+        Accept: "application/json",
+      },
+    });
+    const responseTime = Date.now() - startTime;
+    if (!response.ok && response.status !== 204) {
+      const error = await response.text();
+      await logBreezewayAudit(
+        this.userId,
+        "DELETE",
+        endpoint,
+        undefined,
+        response.status,
+        responseTime,
+        error
+      );
+      throw new Error(`DELETE ${endpoint} failed: ${response.status}`);
+    }
+    await logBreezewayAudit(
+      this.userId,
+      "DELETE",
+      endpoint,
+      undefined,
+      response.status,
+      responseTime
+    );
+  }
+
+  /**
    * Load tokens from database (for server startup)
    */
   async loadTokensFromDb(): Promise<void> {

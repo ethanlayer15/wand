@@ -47,7 +47,7 @@ import {
   backfillCleanlinessRatings,
 } from "./reviewPipeline";
 import { resetAnalysisState } from "./reviewAnalyzer";
-import { activateBreezewayTaskSync, deactivateBreezewayTaskSync, pollBreezewayTasks, closeBreezewayTask, reopenBreezewayTask } from "./breezewayTaskSync";
+import { activateBreezewayTaskSync, deactivateBreezewayTaskSync, pollBreezewayTasks, closeBreezewayTask, reopenBreezewayTask, closeBreezewayTaskWithComment, deleteBreezewayTask, commentBreezewayTask } from "./breezewayTaskSync";
 import { getBreezewaySyncConfig, getTaskByBreezewayId } from "./db";
 import { updateTaskStatus, updateTaskAssignee, updateTaskTitle, getTeamMembersForAssignment, getTaskDetail, listTeamMembers, listInvitations, createInvitation, revokeInvitation, changeUserRole, removeTeamMember, getUserByEmail, toggleTaskUrgent, createTask, getUrgentTasks, reopenAutoResolvedTask, confirmResolution, addTaskComment, addTaskAttachment, getTaskAttachments, deleteTaskAttachment } from "./db";
 import { storagePut } from "./storage";
@@ -388,28 +388,43 @@ export const appRouter = router({
         const existingTask = await getTaskDetail(input.taskId);
         const result = await updateTaskStatus(input.taskId, input.status);
 
-        // Phase 3: Two-way sync for Breezeway tasks
-        if (existingTask?.task?.breezewayTaskId && existingTask?.task?.source === "breezeway") {
+        // Phase 1 two-way sync: mirror status change to Breezeway for ANY task
+        // that has a breezewayTaskId (includes both BW-sourced AND Wand-pushed).
+        if (existingTask?.task?.breezewayTaskId) {
           const bwId = existingTask.task.breezewayTaskId;
           const oldStatus = existingTask.task.status;
           const newStatus = input.status;
 
-          // Dragged to Done → close in Breezeway
+          // completed → close in Breezeway
           if (newStatus === "completed" && oldStatus !== "completed") {
             closeBreezewayTask(bwId, input.taskId).catch((err) =>
               console.error(`[TwoWaySync] Failed to close BW task ${bwId}:`, err)
             );
           }
-          // Dragged from Done back to active → reopen in Breezeway
+          // reopening → reopen in Breezeway
           else if (
             oldStatus === "completed" &&
-            (newStatus === "created" || newStatus === "in_progress")
+            (newStatus === "created" || newStatus === "in_progress" || newStatus === "up_next" || newStatus === "needs_review")
           ) {
             reopenBreezewayTask(bwId, input.taskId).catch((err) =>
               console.error(`[TwoWaySync] Failed to reopen BW task ${bwId}:`, err)
             );
           }
-          // Dragged to Ignored → do NOTHING on Breezeway side (Wand-only dismissal)
+          // ideas_for_later → close in Breezeway with trailing comment
+          else if (newStatus === "ideas_for_later" && oldStatus !== "ideas_for_later") {
+            closeBreezewayTaskWithComment(
+              bwId,
+              "Closed via Wand: moved to Ideas for later"
+            ).catch((err) =>
+              console.error(`[TwoWaySync] Failed to close+comment BW task ${bwId}:`, err)
+            );
+          }
+          // ignored → HARD DELETE in Breezeway (user-confirmed dismissal)
+          else if (newStatus === "ignored" && oldStatus !== "ignored") {
+            deleteBreezewayTask(bwId).catch((err) =>
+              console.error(`[TwoWaySync] Failed to delete BW task ${bwId}:`, err)
+            );
+          }
         }
 
         return result;
@@ -488,12 +503,35 @@ export const appRouter = router({
       }))
       .mutation(async ({ input, ctx }) => {
         if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
-        return addTaskComment({
+        const result = await addTaskComment({
           taskId: input.taskId,
           userId: ctx.user.id,
           userName: ctx.user.name || "Unknown",
           content: input.content,
         });
+
+        // Phase 1 two-way sync: mirror comment to Breezeway if this task is
+        // linked. Fire-and-forget; DB source of truth remains Wand.
+        try {
+          const detail = await getTaskDetail(input.taskId);
+          const bwId = detail?.task?.breezewayTaskId;
+          if (bwId) {
+            const who = ctx.user.name || "Unknown";
+            commentBreezewayTask(
+              bwId,
+              `[Wand · ${who}] ${input.content}`
+            ).catch((err) =>
+              console.error(
+                `[TwoWaySync] Failed to mirror comment to BW task ${bwId}:`,
+                err?.message ?? err
+              )
+            );
+          }
+        } catch (err: any) {
+          console.error("[TwoWaySync] Comment mirror lookup failed:", err?.message ?? err);
+        }
+
+        return result;
       }),
 
     updateTitle: protectedProcedure
