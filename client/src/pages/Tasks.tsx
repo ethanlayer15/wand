@@ -787,7 +787,22 @@ function TaskDetailSheet({
             <SheetTitle className="text-base">Task Detail</SheetTitle>
             {task && (
               <div className="flex items-center gap-1">
-                {!task.breezewayTaskId && (
+                {task.breezewayTaskId ? (
+                  <Button
+                    asChild
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5 text-cyan-700 hover:text-cyan-900"
+                  >
+                    <a
+                      href={`https://app.breezeway.io/task/${task.breezewayTaskId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      View in Breezeway
+                    </a>
+                  </Button>
+                ) : (
                   <Button
                     variant="ghost"
                     size="sm"
