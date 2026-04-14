@@ -12,6 +12,8 @@
  */
 import { recalculateAllRollingScores } from "./compensation";
 import { checkAndNotifyUnassignedSdts } from "./sdtNotifier";
+import { checkAndNotifyLastMinuteChanges } from "./lastMinuteNotifier";
+import { generatePayrollRun, getPayPeriodMondayFor } from "./payrollRun";
 import { startGuestMessagePipelineJob } from "./taskCreator";
 import { startReviewPipelineJob } from "./reviewPipeline";
 import { pollBreezewayTasks } from "./breezewayTaskSync";
@@ -109,6 +111,31 @@ async function runCompensationRecalc(): Promise<void> {
   console.log(
     `[Cron] Recalculation: ${result.updated}/${result.processed} cleaners updated`
   );
+}
+
+async function runWeeklyPayrollGeneration(): Promise<void> {
+  try {
+    const weekOf = getPayPeriodMondayFor();
+    console.log(`[Cron] Generating weekly payroll draft for week ${weekOf}...`);
+    const result = await generatePayrollRun(weekOf);
+    console.log(
+      `[Cron] Payroll run ${result.runId} (${result.status}): ${result.cleanerCount} cleaners, $${result.totalGrossPay} gross`
+    );
+  } catch (err: any) {
+    console.error("[Cron] Weekly payroll generation failed:", err.message);
+  }
+}
+
+async function runLastMinuteCheck(): Promise<void> {
+  try {
+    console.log("[Cron] Running last-minute reservation change check...");
+    const result = await checkAndNotifyLastMinuteChanges();
+    console.log(
+      `[Cron] Last-minute check: ${result.reservationsFetched} fetched, ${result.changesDetected} changes, notified=${result.notified}`
+    );
+  } catch (err: any) {
+    console.error("[Cron] Last-minute check failed:", err.message);
+  }
 }
 
 async function runSdtCheck(): Promise<void> {
@@ -362,6 +389,39 @@ export function startCronJobs(): void {
 
   // 7. Monthly receipt reminder — 1st of each month at 8 AM ET
   scheduleMonthlyReminder();
+
+  // 9. Weekly payroll generation — Wednesday 9 AM ET
+  const wedDelay = msUntilDayHourET(3, 9); // 3 = Wednesday, 9 = 9 AM ET
+  const wedDelayMin = Math.round(wedDelay / 60_000);
+  console.log(`[Cron] Scheduling "Weekly Payroll Generation" for Wednesday 9 AM ET (in ~${wedDelayMin} min)`);
+  const wedTimer = setTimeout(() => {
+    runWeeklyPayrollGeneration().catch((err) =>
+      console.error("[Cron] Weekly payroll generation failed:", err.message)
+    );
+    // Repeat every 7 days
+    const weeklyPayrollTimer = setInterval(() => {
+      runWeeklyPayrollGeneration().catch((err) =>
+        console.error("[Cron] Weekly payroll generation failed:", err.message)
+      );
+    }, ONE_WEEK_MS);
+    timers.push(weeklyPayrollTimer);
+  }, wedDelay);
+  timers.push(wedTimer);
+
+  // 8. Last-minute reservation change check — initial run on startup + every 30 minutes
+  const lastMinStartup = setTimeout(() => {
+    runLastMinuteCheck().catch((err) =>
+      console.error("[Cron] Initial last-minute check failed:", err.message)
+    );
+  }, 25_000); // 25s after boot (after team/listings syncs)
+  timers.push(lastMinStartup);
+  const lastMinInterval = setInterval(() => {
+    runLastMinuteCheck().catch((err) =>
+      console.error("[Cron] Last-minute check interval failed:", err.message)
+    );
+  }, 30 * 60 * 1000); // every 30 min
+  timers.push(lastMinInterval);
+  console.log("[Cron] Last-minute reservation change check scheduled (startup + every 30 min)");
 }
 
 /**

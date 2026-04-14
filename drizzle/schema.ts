@@ -899,6 +899,110 @@ export const cleaningReportsSent = mysqlTable("cleaningReportsSent", {
 export type CleaningReportSent = typeof cleaningReportsSent.$inferSelect;
 export type InsertCleaningReportSent = typeof cleaningReportsSent.$inferInsert;
 
+// ── Reservation Snapshots (for last-minute change detection) ────────
+
+/**
+ * Snapshot of reservation state fetched from Breezeway so the last-minute
+ * change notifier can diff against prior state and detect:
+ *   - new bookings within the 72h window
+ *   - shortened stays (check-out moved earlier)
+ *   - extended stays (check-out moved later)
+ *   - check-in date shifts
+ *   - cancellations (disappeared from feed while check_in still upcoming)
+ *
+ * `lastChangeHash` stores a deterministic hash of the most recent change we
+ * already notified about so repeat cron runs don't re-fire the same alert.
+ */
+export const reservationSnapshots = mysqlTable("reservationSnapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  breezewayReservationId: varchar("breezewayReservationId", { length: 64 }).notNull().unique(),
+  homeId: int("homeId").notNull(),
+  checkIn: varchar("checkIn", { length: 32 }), // YYYY-MM-DD
+  checkOut: varchar("checkOut", { length: 32 }), // YYYY-MM-DD
+  status: varchar("status", { length: 64 }), // Breezeway reservation status string
+  guestName: text("guestName"),
+  lastChangeHash: varchar("lastChangeHash", { length: 128 }),
+  lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ReservationSnapshot = typeof reservationSnapshots.$inferSelect;
+export type InsertReservationSnapshot = typeof reservationSnapshots.$inferInsert;
+
+// ── Payroll Runs (QuickBooks Payroll Elite export) ──────────────────
+
+/**
+ * A weekly payroll run. Generated every Wednesday 9 AM ET covering the
+ * prior week (Mon → Sun). Admin reviews the draft, approves it, and
+ * exports a CSV that the accountant imports into QBO Payroll Elite.
+ *
+ * Statuses:
+ *   - draft:     generated but not yet approved
+ *   - approved:  admin has reviewed and locked the run (numbers frozen)
+ *   - submitted: CSV was exported and sent to accountant / QB
+ *
+ * `includesMonthlyReceipts` flags the last-Friday-of-month pay cycle
+ * which adds cell-phone + vehicle reimbursement to each eligible line.
+ */
+export const payrollRuns = mysqlTable("payrollRuns", {
+  id: int("id").autoincrement().primaryKey(),
+  weekOf: varchar("weekOf", { length: 10 }).notNull(), // YYYY-MM-DD of Monday
+  status: mysqlEnum("payrollRunStatus", ["draft", "approved", "submitted"]).default("draft").notNull(),
+  includesMonthlyReceipts: boolean("includesMonthlyReceipts").default(false).notNull(),
+  cleanerCount: int("cleanerCount").default(0).notNull(),
+  totalGrossPay: decimal("totalGrossPay", { precision: 12, scale: 2 }).default("0").notNull(),
+  totalMileage: decimal("totalMileage", { precision: 10, scale: 2 }).default("0").notNull(),
+  totalReimbursements: decimal("totalReimbursements", { precision: 10, scale: 2 }).default("0").notNull(),
+  generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+  approvedBy: int("approvedBy"), // users.id
+  approvedAt: timestamp("approvedAt"),
+  submittedAt: timestamp("submittedAt"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  weekOfUnique: uniqueIndex("payrollRuns_weekOf_unique").on(t.weekOf),
+}));
+
+export type PayrollRun = typeof payrollRuns.$inferSelect;
+export type InsertPayrollRun = typeof payrollRuns.$inferInsert;
+
+/**
+ * One line per cleaner per run. Commission is split by listing state so
+ * multi-state W2s allocate correctly (Virginia + North Carolina).
+ * `weeklyPaySnapshotId` links back to the immutable source row used to
+ * generate this line so we can always show "what was this based on?".
+ */
+export const payrollRunLines = mysqlTable("payrollRunLines", {
+  id: int("id").autoincrement().primaryKey(),
+  payrollRunId: int("payrollRunId").notNull(), // FK payrollRuns.id
+  cleanerId: int("cleanerId").notNull(),
+  cleanerName: text("cleanerName").notNull(),
+  quickbooksEmployeeId: varchar("quickbooksEmployeeId", { length: 128 }),
+  weeklyPaySnapshotId: int("weeklyPaySnapshotId"), // FK weeklyPaySnapshots.id
+  // Commission split by listing state
+  commissionVA: decimal("commissionVA", { precision: 10, scale: 2 }).default("0").notNull(),
+  commissionNC: decimal("commissionNC", { precision: 10, scale: 2 }).default("0").notNull(),
+  commissionOther: decimal("commissionOther", { precision: 10, scale: 2 }).default("0").notNull(),
+  totalCommission: decimal("totalCommission", { precision: 10, scale: 2 }).default("0").notNull(),
+  // Mileage — non-taxable, tracked separately (business expense reimbursement)
+  mileageMiles: decimal("mileageMiles", { precision: 8, scale: 2 }).default("0").notNull(),
+  mileageReimbursement: decimal("mileageReimbursement", { precision: 10, scale: 2 }).default("0").notNull(),
+  // Monthly reimbursements — only populated on last-Fri-of-month runs
+  cellPhoneReimbursement: decimal("cellPhoneReimbursement", { precision: 10, scale: 2 }).default("0").notNull(),
+  vehicleReimbursement: decimal("vehicleReimbursement", { precision: 10, scale: 2 }).default("0").notNull(),
+  // Total
+  totalPay: decimal("totalPay", { precision: 10, scale: 2 }).default("0").notNull(),
+  // Flags for UI review
+  missingQbId: boolean("missingQbId").default(false).notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PayrollRunLine = typeof payrollRunLines.$inferSelect;
+export type InsertPayrollRunLine = typeof payrollRunLines.$inferInsert;
+
 // ── Wand AI Agents (Phase 1 foundation) ─────────────────────────────
 
 /**

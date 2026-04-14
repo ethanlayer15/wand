@@ -34,9 +34,11 @@ import { compensationRouter } from "./compensationRouter";
 import { podRouter } from "./podRouter";
 import { cleanerDashboardRouter } from "./cleanerDashboardRouter";
 import { cleaningReportsRouter } from "./cleaningReportsRouter";
+import { payrollRouter } from "./payrollRouter";
 import { agentRouter } from "./agentRouter";
 import { ENV } from "./_core/env";
 import { sendSlackNotification, checkAndNotifyUnassignedSdts } from "./sdtNotifier";
+import { checkAndNotifyLastMinuteChanges } from "./lastMinuteNotifier";
 import { updateIntegrationStatus } from "./db";
 import { pushTaskToBreezeway, startGuestMessagePipelineJob, getPipelineJobStatus } from "./taskCreator";
 import {
@@ -60,6 +62,7 @@ export const appRouter = router({
   pods: podRouter,
   cleanerDashboard: cleanerDashboardRouter,
   cleaningReports: cleaningReportsRouter,
+  payroll: payrollRouter,
   agent: agentRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
@@ -929,6 +932,25 @@ export const appRouter = router({
     triggerSdtCheck: managerProcedure.mutation(async () => {
       const result = await checkAndNotifyUnassignedSdts();
       return result;
+    }),
+
+    // Manually trigger last-minute reservation change check
+    triggerLastMinuteCheck: managerProcedure.mutation(async () => {
+      const result = await checkAndNotifyLastMinuteChanges();
+      return {
+        reservationsFetched: result.reservationsFetched,
+        changesDetected: result.changesDetected,
+        notified: result.notified,
+        changes: result.changes.map((c) => ({
+          type: c.type,
+          propertyName: c.propertyName ?? `Property #${c.homeId}`,
+          reservationId: c.breezewayReservationId,
+          previousCheckIn: c.previousCheckIn,
+          previousCheckOut: c.previousCheckOut,
+          newCheckIn: c.newCheckIn,
+          newCheckOut: c.newCheckOut,
+        })),
+      };
     }),
   }),
 

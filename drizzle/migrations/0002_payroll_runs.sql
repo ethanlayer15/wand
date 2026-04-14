@@ -1,0 +1,41 @@
+CREATE TABLE `payrollRuns` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`weekOf` varchar(10) NOT NULL,
+	`payrollRunStatus` enum('draft','approved','submitted') NOT NULL DEFAULT 'draft',
+	`includesMonthlyReceipts` boolean NOT NULL DEFAULT false,
+	`cleanerCount` int NOT NULL DEFAULT 0,
+	`totalGrossPay` decimal(12,2) NOT NULL DEFAULT '0',
+	`totalMileage` decimal(10,2) NOT NULL DEFAULT '0',
+	`totalReimbursements` decimal(10,2) NOT NULL DEFAULT '0',
+	`generatedAt` timestamp NOT NULL DEFAULT (now()),
+	`approvedBy` int,
+	`approvedAt` timestamp,
+	`submittedAt` timestamp,
+	`notes` text,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `payrollRuns_id` PRIMARY KEY(`id`),
+	CONSTRAINT `payrollRuns_weekOf_unique` UNIQUE(`weekOf`)
+);
+--> statement-breakpoint
+CREATE TABLE `payrollRunLines` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`payrollRunId` int NOT NULL,
+	`cleanerId` int NOT NULL,
+	`cleanerName` text NOT NULL,
+	`quickbooksEmployeeId` varchar(128),
+	`weeklyPaySnapshotId` int,
+	`commissionVA` decimal(10,2) NOT NULL DEFAULT '0',
+	`commissionNC` decimal(10,2) NOT NULL DEFAULT '0',
+	`commissionOther` decimal(10,2) NOT NULL DEFAULT '0',
+	`totalCommission` decimal(10,2) NOT NULL DEFAULT '0',
+	`mileageMiles` decimal(8,2) NOT NULL DEFAULT '0',
+	`mileageReimbursement` decimal(10,2) NOT NULL DEFAULT '0',
+	`cellPhoneReimbursement` decimal(10,2) NOT NULL DEFAULT '0',
+	`vehicleReimbursement` decimal(10,2) NOT NULL DEFAULT '0',
+	`totalPay` decimal(10,2) NOT NULL DEFAULT '0',
+	`missingQbId` boolean NOT NULL DEFAULT false,
+	`notes` text,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `payrollRunLines_id` PRIMARY KEY(`id`)
+);

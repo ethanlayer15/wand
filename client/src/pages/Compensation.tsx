@@ -65,6 +65,9 @@ import {
   Home,
   MessageSquare,
   ChevronRight,
+  Receipt,
+  Download,
+  FileCheck2,
 } from "lucide-react";
 import { useState, useMemo, useCallback, useRef } from "react";
 import { toast } from "sonner";
@@ -110,6 +113,10 @@ export default function Compensation() {
             <Calculator className="h-3.5 w-3.5 mr-1" />
             Pay Calculator
           </TabsTrigger>
+          <TabsTrigger value="payroll" className="text-xs">
+            <Receipt className="h-3.5 w-3.5 mr-1" />
+            Payroll
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="properties">
@@ -123,6 +130,9 @@ export default function Compensation() {
         </TabsContent>
         <TabsContent value="calculator">
           <PayCalculatorTab />
+        </TabsContent>
+        <TabsContent value="payroll">
+          <PayrollTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -2348,5 +2358,391 @@ function CleansHistoryTab() {
         </div>
       )}
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Payroll Tab — QBO Payroll Elite weekly run management
+// ─────────────────────────────────────────────────────────────────────
+
+function PayrollTab() {
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+
+  const runsQuery = trpc.payroll.list.useQuery({ limit: 20 });
+  const runs = runsQuery.data ?? [];
+
+  const utils = trpc.useUtils();
+
+  const generateMutation = trpc.payroll.generate.useMutation({
+    onSuccess: (res) => {
+      toast.success(
+        `Payroll ${res.status === "replaced_draft" ? "regenerated" : "generated"}: ` +
+          `${res.cleanerCount} cleaners, $${res.totalGrossPay.toFixed(2)} gross`
+      );
+      runsQuery.refetch();
+      setSelectedRunId(res.runId);
+    },
+    onError: (e) => toast.error(`Generate failed: ${e.message}`),
+  });
+
+  const statusBadge = (status: string) => {
+    if (status === "approved")
+      return (
+        <Badge variant="secondary" className="text-[10px]">
+          Approved
+        </Badge>
+      );
+    if (status === "submitted")
+      return (
+        <Badge className="text-[10px] bg-green-600 hover:bg-green-600">
+          Submitted
+        </Badge>
+      );
+    return (
+      <Badge variant="outline" className="text-[10px]">
+        Draft
+      </Badge>
+    );
+  };
+
+  return (
+    <div className="space-y-4 mt-2">
+      {/* Actions */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Payroll Runs</h2>
+          <p className="text-xs text-muted-foreground">
+            Weekly runs auto-generate Wed 9 AM ET covering the prior Mon–Sun.
+            Review, approve, and export the CSV for QuickBooks Payroll Elite.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          onClick={() => generateMutation.mutate()}
+          disabled={generateMutation.isPending}
+        >
+          {generateMutation.isPending ? (
+            <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" />
+          ) : (
+            <Plus className="h-3.5 w-3.5 mr-1" />
+          )}
+          Generate this week
+        </Button>
+      </div>
+
+      {/* Runs list */}
+      {runsQuery.isLoading ? (
+        <Skeleton className="h-40 w-full" />
+      ) : runs.length === 0 ? (
+        <Card className="p-6">
+          <p className="text-sm text-muted-foreground">
+            No payroll runs yet. Click "Generate this week" to create the first
+            draft.
+          </p>
+        </Card>
+      ) : (
+        <div className="rounded-md border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">Week Of</TableHead>
+                <TableHead className="text-xs">Generated</TableHead>
+                <TableHead className="text-xs">Status</TableHead>
+                <TableHead className="text-xs text-right">Cleaners</TableHead>
+                <TableHead className="text-xs text-right">Gross</TableHead>
+                <TableHead className="text-xs text-right">Mileage</TableHead>
+                <TableHead className="text-xs text-right">Reimb.</TableHead>
+                <TableHead className="text-xs">Flags</TableHead>
+                <TableHead className="text-xs w-10" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {runs.map((r) => (
+                <TableRow
+                  key={r.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => setSelectedRunId(r.id)}
+                >
+                  <TableCell className="text-xs font-medium">{r.weekOf}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {r.generatedAt
+                      ? new Date(r.generatedAt).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                        })
+                      : "—"}
+                  </TableCell>
+                  <TableCell>{statusBadge(r.status)}</TableCell>
+                  <TableCell className="text-xs text-right">
+                    {r.cleanerCount}
+                  </TableCell>
+                  <TableCell className="text-xs text-right font-mono">
+                    ${Number(r.totalGrossPay).toFixed(2)}
+                  </TableCell>
+                  <TableCell className="text-xs text-right font-mono text-muted-foreground">
+                    ${Number(r.totalMileage).toFixed(2)}
+                  </TableCell>
+                  <TableCell className="text-xs text-right font-mono text-muted-foreground">
+                    ${Number(r.totalReimbursements).toFixed(2)}
+                  </TableCell>
+                  <TableCell>
+                    {r.includesMonthlyReceipts && (
+                      <Badge variant="outline" className="text-[10px]">
+                        +Receipts
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {/* Detail sheet */}
+      <PayrollRunDetailSheet
+        runId={selectedRunId}
+        open={selectedRunId !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedRunId(null);
+        }}
+        onAnyMutation={() => {
+          runsQuery.refetch();
+          if (selectedRunId)
+            utils.payroll.get.invalidate({ runId: selectedRunId });
+        }}
+      />
+    </div>
+  );
+}
+
+function PayrollRunDetailSheet({
+  runId,
+  open,
+  onOpenChange,
+  onAnyMutation,
+}: {
+  runId: number | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAnyMutation: () => void;
+}) {
+  const detailQuery = trpc.payroll.get.useQuery(
+    { runId: runId ?? 0 },
+    { enabled: runId !== null }
+  );
+
+  const approveMutation = trpc.payroll.approve.useMutation({
+    onSuccess: () => {
+      toast.success("Payroll run approved");
+      onAnyMutation();
+    },
+    onError: (e) => toast.error(`Approve failed: ${e.message}`),
+  });
+
+  const submittedMutation = trpc.payroll.markSubmitted.useMutation({
+    onSuccess: () => {
+      toast.success("Marked as submitted");
+      onAnyMutation();
+    },
+    onError: (e) => toast.error(`Mark submitted failed: ${e.message}`),
+  });
+
+  const utils = trpc.useUtils();
+  const [downloading, setDownloading] = useState(false);
+
+  async function downloadCsv() {
+    if (!runId) return;
+    setDownloading(true);
+    try {
+      const { csv } = await utils.payroll.exportCsv.fetch({ runId });
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `payroll_${detailQuery.data?.run.weekOf ?? runId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("CSV downloaded");
+    } catch (e: any) {
+      toast.error(`Download failed: ${e.message}`);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const run = detailQuery.data?.run;
+  const lines = detailQuery.data?.lines ?? [];
+  const missingQbCount = lines.filter((l) => l.missingQbId).length;
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle>
+            Payroll Run {run ? `— Week of ${run.weekOf}` : ""}
+          </SheetTitle>
+        </SheetHeader>
+
+        {detailQuery.isLoading || !run ? (
+          <Skeleton className="h-40 w-full mt-4" />
+        ) : (
+          <div className="space-y-4 mt-4">
+            {/* Summary */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Card className="p-3">
+                <p className="text-[10px] text-muted-foreground">Cleaners</p>
+                <p className="text-lg font-semibold">{run.cleanerCount}</p>
+              </Card>
+              <Card className="p-3">
+                <p className="text-[10px] text-muted-foreground">Gross Commission</p>
+                <p className="text-lg font-semibold">
+                  ${Number(run.totalGrossPay).toFixed(2)}
+                </p>
+              </Card>
+              <Card className="p-3">
+                <p className="text-[10px] text-muted-foreground">Mileage</p>
+                <p className="text-lg font-semibold">
+                  ${Number(run.totalMileage).toFixed(2)}
+                </p>
+              </Card>
+              <Card className="p-3">
+                <p className="text-[10px] text-muted-foreground">Reimbursements</p>
+                <p className="text-lg font-semibold">
+                  ${Number(run.totalReimbursements).toFixed(2)}
+                </p>
+              </Card>
+            </div>
+
+            {run.includesMonthlyReceipts && (
+              <div className="text-xs rounded-md border bg-muted/50 px-3 py-2">
+                <Receipt className="inline h-3 w-3 mr-1" />
+                Last run of the month — monthly cell phone + vehicle
+                reimbursements are included for cleaners with approved receipts.
+              </div>
+            )}
+
+            {missingQbCount > 0 && (
+              <div className="text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900 px-3 py-2">
+                ⚠ {missingQbCount} cleaner{missingQbCount > 1 ? "s" : ""} missing
+                a QuickBooks Employee ID. Add it on the Cleaners tab before
+                importing into QB.
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex flex-wrap gap-2">
+              {run.status === "draft" && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (confirm("Approve this payroll run? This locks the numbers."))
+                      approveMutation.mutate({ runId: run.id });
+                  }}
+                  disabled={approveMutation.isPending}
+                >
+                  <FileCheck2 className="h-3.5 w-3.5 mr-1" />
+                  Approve
+                </Button>
+              )}
+              {run.status === "approved" && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    if (confirm("Mark this run as submitted to QuickBooks?"))
+                      submittedMutation.mutate({ runId: run.id });
+                  }}
+                  disabled={submittedMutation.isPending}
+                >
+                  <Check className="h-3.5 w-3.5 mr-1" />
+                  Mark Submitted
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={downloadCsv}
+                disabled={downloading}
+              >
+                <Download className="h-3.5 w-3.5 mr-1" />
+                Download CSV
+              </Button>
+            </div>
+
+            {/* Lines table */}
+            <div className="rounded-md border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs">Cleaner</TableHead>
+                    <TableHead className="text-xs">QB ID</TableHead>
+                    <TableHead className="text-xs text-right">VA</TableHead>
+                    <TableHead className="text-xs text-right">NC</TableHead>
+                    <TableHead className="text-xs text-right">Other</TableHead>
+                    <TableHead className="text-xs text-right">Mileage</TableHead>
+                    <TableHead className="text-xs text-right">Reimb.</TableHead>
+                    <TableHead className="text-xs text-right">Total</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lines.map((l) => {
+                    const reimb =
+                      Number(l.cellPhoneReimbursement) +
+                      Number(l.vehicleReimbursement);
+                    return (
+                      <TableRow key={l.id}>
+                        <TableCell className="text-xs font-medium">
+                          {l.cleanerName}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {l.quickbooksEmployeeId ?? (
+                            <span className="text-amber-700">— missing</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-right font-mono">
+                          ${Number(l.commissionVA).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-xs text-right font-mono">
+                          ${Number(l.commissionNC).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-xs text-right font-mono">
+                          ${Number(l.commissionOther).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-xs text-right font-mono text-muted-foreground">
+                          ${Number(l.mileageReimbursement).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-xs text-right font-mono text-muted-foreground">
+                          ${reimb.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-xs text-right font-mono font-semibold">
+                          ${Number(l.totalPay).toFixed(2)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+
+            {run.approvedAt && (
+              <p className="text-xs text-muted-foreground">
+                Approved {new Date(run.approvedAt).toLocaleString()}
+              </p>
+            )}
+            {run.submittedAt && (
+              <p className="text-xs text-muted-foreground">
+                Submitted {new Date(run.submittedAt).toLocaleString()}
+              </p>
+            )}
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
