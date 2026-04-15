@@ -19,6 +19,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Sheet,
   SheetContent,
@@ -2222,7 +2224,8 @@ export default function Tasks() {
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [taskTypeFilter, setTaskTypeFilter] = useState<string>("all");
   const [propertyFilter, setPropertyFilter] = useState<string>("all");
-  const [podFilter, setPodFilter] = useState<string>("all");
+  const [podFilterIds, setPodFilterIds] = useState<number[]>([]);
+  const [podFilterOpen, setPodFilterOpen] = useState(false);
   const [showMyTasks, setShowMyTasks] = useState(false);
 
   // Pods data for filtering
@@ -2503,20 +2506,20 @@ export default function Tasks() {
             ? displayTasks.filter((t) => t.source === "wand_manual" || t.source === "manual")
             : displayTasks.filter((t) => t.source === sourceFilter);
 
-  // Apply pod filter
-  // Build a set of listing IDs that belong to the selected pod from listingsData
+  // Apply pod filter (multi-select)
+  // Build a set of listing IDs that belong to ANY of the selected pods
   const podListingIds = useMemo(() => {
-    if (podFilter === "all") return null;
-    const podId = Number(podFilter);
+    if (podFilterIds.length === 0) return null;
+    const podSet = new Set(podFilterIds);
     const ids = new Set<number>();
     for (const l of listingsData) {
-      if ((l as any).podId === podId) ids.add(l.id);
+      if (podSet.has((l as any).podId)) ids.add(l.id);
     }
     return ids;
-  }, [podFilter, listingsData]);
+  }, [podFilterIds, listingsData]);
 
   const podFiltered =
-    podFilter === "all" || !podListingIds
+    podFilterIds.length === 0 || !podListingIds
       ? sourceFiltered
       : sourceFiltered.filter((t) => t.listingId !== null && podListingIds.has(t.listingId));
 
@@ -2804,27 +2807,64 @@ export default function Tasks() {
             </Select>
           </div>
 
-          {/* Pod filter */}
-          <Select value={podFilter} onValueChange={setPodFilter}>
-            <SelectTrigger className="h-8 text-xs w-[160px]">
-              <div className="flex items-center gap-1.5 truncate">
-                <Hexagon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">
-                  {podFilter === "all"
-                    ? `All Pods (${podsData.length})`
-                    : podsData.find((p: any) => String(p.id) === podFilter)?.name || "Pod"}
-                </span>
+          {/* Pod filter (multi-select) */}
+          <Popover open={podFilterOpen} onOpenChange={setPodFilterOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="h-8 text-xs w-[160px] px-3 flex items-center justify-between rounded-md border border-input bg-background hover:bg-accent/50"
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <Hexagon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">
+                    {podFilterIds.length === 0
+                      ? `All Pods (${podsData.length})`
+                      : podFilterIds.length === 1
+                        ? podsData.find((p: any) => p.id === podFilterIds[0])?.name ?? "1 Pod"
+                        : `${podFilterIds.length} Pods`}
+                  </span>
+                </div>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-50 shrink-0"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-56 p-1" align="start">
+              <button
+                type="button"
+                onClick={() => setPodFilterIds([])}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded hover:bg-accent text-left ${
+                  podFilterIds.length === 0 ? "font-medium" : ""
+                }`}
+              >
+                All Pods ({podsData.length})
+              </button>
+              <div className="my-1 h-px bg-border" />
+              <div className="max-h-64 overflow-y-auto">
+                {podsData.map((p: any) => {
+                  const checked = podFilterIds.includes(p.id);
+                  return (
+                    <label
+                      key={p.id}
+                      className="flex items-center gap-2 px-2 py-1.5 text-xs rounded hover:bg-accent cursor-pointer"
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(c) => {
+                          setPodFilterIds((prev) => {
+                            const next = new Set(prev);
+                            if (c) next.add(p.id);
+                            else next.delete(p.id);
+                            return Array.from(next);
+                          });
+                        }}
+                      />
+                      <span className="flex-1 truncate">{p.name}</span>
+                      <span className="text-muted-foreground">({p.propertyCount})</span>
+                    </label>
+                  );
+                })}
               </div>
-            </SelectTrigger>
-            <SelectContent className="max-h-[300px]">
-              <SelectItem value="all">All Pods ({podsData.length})</SelectItem>
-              {podsData.map((p: any) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {p.name} ({p.propertyCount})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            </PopoverContent>
+          </Popover>
 
           {/* Property filter */}
           <PropertyCombobox
@@ -2874,7 +2914,7 @@ export default function Tasks() {
           )}
 
           {/* Reset filters */}
-          {(sourceFilter !== "all" || taskTypeFilter !== "all" || propertyFilter !== "all" || podFilter !== "all" || showMyTasks) && (
+          {(sourceFilter !== "all" || taskTypeFilter !== "all" || propertyFilter !== "all" || podFilterIds.length > 0 || showMyTasks) && (
             <Button
               size="sm"
               variant="ghost"
@@ -2883,7 +2923,7 @@ export default function Tasks() {
                 setSourceFilter("all");
                 setTaskTypeFilter("all");
                 setPropertyFilter("all");
-                setPodFilter("all");
+                setPodFilterIds([]);
                 setShowMyTasks(false);
               }}
             >

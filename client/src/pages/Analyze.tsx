@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar } from "@/components/ui/calendar";
 import {
   BarChart3,
@@ -54,7 +55,7 @@ interface AnalyzeFilters {
   endDate?: string;
   listingId?: number;
   state?: string;
-  podId?: number;
+  podIds?: number[];
 }
 
 // ── Helper Components ──────────────────────────────────────────────────
@@ -152,15 +153,25 @@ function FilterBar({
     filters.timeRange !== "all" || isCustom,
     filters.listingId,
     filters.state,
-    filters.podId,
+    filters.podIds && filters.podIds.length > 0,
   ].filter(Boolean).length;
 
-  // Filter listings by selected pod
+  // Filter listings by selected pods (multi)
   const filteredListings = useMemo(() => {
     if (!listings) return listings;
-    if (!filters.podId) return listings;
-    return listings.filter((l: any) => l.podId === filters.podId);
-  }, [listings, filters.podId]);
+    if (!filters.podIds || filters.podIds.length === 0) return listings;
+    const podSet = new Set(filters.podIds);
+    return listings.filter((l: any) => podSet.has(l.podId));
+  }, [listings, filters.podIds]);
+
+  const [podPopoverOpen, setPodPopoverOpen] = useState(false);
+  const selectedPodCount = filters.podIds?.length ?? 0;
+  const podLabel =
+    selectedPodCount === 0
+      ? "All Pods"
+      : selectedPodCount === 1
+        ? (pods?.find((p) => p.id === filters.podIds![0])?.name ?? "1 Pod")
+        : `${selectedPodCount} Pods`;
 
   const clearFilters = () => {
     setFilters({ timeRange: "all" });
@@ -262,25 +273,74 @@ function FilterBar({
 
       {/* Pod, Property, and Region filters */}
       <div className="flex gap-3 flex-wrap">
-        <Select
-          value={filters.podId ? String(filters.podId) : "all"}
-          onValueChange={(v) => {
-            const podId = v !== "all" ? Number(v) : undefined;
-            setFilters({ ...filters, podId, listingId: undefined });
-          }}
-        >
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder="All Pods" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Pods</SelectItem>
-            {pods?.map((p) => (
-              <SelectItem key={p.id} value={String(p.id)}>
-                {p.name} ({p.propertyCount})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Popover open={podPopoverOpen} onOpenChange={setPodPopoverOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="w-44 h-9 px-3 flex items-center justify-between rounded-md border border-input bg-background text-sm hover:bg-accent/50"
+            >
+              <span className={selectedPodCount === 0 ? "text-muted-foreground" : ""}>
+                {podLabel}
+              </span>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="opacity-50"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-56 p-1" align="start">
+            <button
+              type="button"
+              onClick={() => {
+                setFilters({ ...filters, podIds: undefined, listingId: undefined });
+              }}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-accent text-left ${
+                selectedPodCount === 0 ? "font-medium" : ""
+              }`}
+            >
+              All Pods
+            </button>
+            <div className="my-1 h-px bg-border" />
+            <div className="max-h-64 overflow-y-auto">
+              {pods?.map((p) => {
+                const checked = filters.podIds?.includes(p.id) ?? false;
+                return (
+                  <label
+                    key={p.id}
+                    className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-accent cursor-pointer"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(c) => {
+                        const next = new Set(filters.podIds ?? []);
+                        if (c) next.add(p.id);
+                        else next.delete(p.id);
+                        const arr = Array.from(next);
+                        setFilters({
+                          ...filters,
+                          podIds: arr.length > 0 ? arr : undefined,
+                          listingId: undefined,
+                        });
+                      }}
+                    />
+                    <span className="flex-1">{p.name}</span>
+                    <span className="text-xs text-muted-foreground">({p.propertyCount})</span>
+                  </label>
+                );
+              })}
+            </div>
+          </PopoverContent>
+        </Popover>
 
         <PropertyCombobox
           properties={(filteredListings || listings || []).map((l) => ({
@@ -333,7 +393,7 @@ export default function Analyze() {
     if (filters.endDate) input.endDate = filters.endDate;
     if (filters.listingId) input.listingId = filters.listingId;
     if (filters.state) input.state = filters.state;
-    if (filters.podId) input.podId = filters.podId;
+    if (filters.podIds && filters.podIds.length > 0) input.podIds = filters.podIds;
     return Object.keys(input).length > 0 ? input : undefined;
   }, [filters]);
 
@@ -673,7 +733,7 @@ function TrendsTab({ filters }: { filters: AnalyzeFilters }) {
   const { data, isLoading } = trpc.analyze.trends.useQuery({
     months,
     listingId: filters.listingId,
-    podId: filters.podId,
+    podIds: filters.podIds,
     timeRange: filters.timeRange !== "all" ? filters.timeRange : undefined,
     startDate: filters.startDate,
     endDate: filters.endDate,
@@ -1032,7 +1092,7 @@ function FlaggedTab({ filters }: { filters: AnalyzeFilters }) {
   const [severity, setSeverity] = useState<string>("all");
   const { data, isLoading } = trpc.analyze.flagged.useQuery({
     listingId: filters.listingId,
-    podId: filters.podId,
+    podIds: filters.podIds,
     severity: severity !== "all" ? severity : undefined,
     limit: 100,
     timeRange: filters.timeRange !== "all" ? filters.timeRange : undefined,
@@ -1122,7 +1182,7 @@ function FlaggedTab({ filters }: { filters: AnalyzeFilters }) {
 function ComparisonTab({ filters }: { filters: AnalyzeFilters }) {
   const { data, isLoading } = trpc.analyze.comparison.useQuery({
     listingId: filters.listingId,
-    podId: filters.podId,
+    podIds: filters.podIds,
     timeRange: filters.timeRange !== "all" ? filters.timeRange : undefined,
     startDate: filters.startDate,
     endDate: filters.endDate,
@@ -1221,7 +1281,7 @@ function FeedTab({ filters }: { filters: AnalyzeFilters }) {
 
   const { data, isLoading } = trpc.analyze.feed.useQuery({
     listingId: filters.listingId,
-    podId: filters.podId,
+    podIds: filters.podIds,
     source: source !== "all" ? source : undefined,
     sentiment: sentiment !== "all" ? sentiment : undefined,
     search: search || undefined,

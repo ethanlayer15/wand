@@ -54,7 +54,8 @@ export const analyzeRouter = router({
       endDate: z.string().optional(),
       listingId: z.number().optional(),
       state: z.string().optional(), // state filter (region/pod)
-      podId: z.number().optional(),
+      podId: z.number().optional(), // deprecated, use podIds
+      podIds: z.array(z.number()).optional(),
     }).optional())
     .query(async ({ input }) => {
     const [allListings, allReviews, allAnalyses, messages, tasks] = await Promise.all([
@@ -65,14 +66,23 @@ export const analyzeRouter = router({
       getTasks(),
     ]);
 
+    // Normalise legacy single podId into podIds
+    const effectivePodIds =
+      input?.podIds && input.podIds.length > 0
+        ? input.podIds
+        : input?.podId
+          ? [input.podId]
+          : null;
+
     // Build listing ID set based on filters
     const listingMap = new Map(allListings.map((l) => [l.id, l]));
     let filteredListingIds: Set<number> | null = null;
     if (input?.listingId) {
       filteredListingIds = new Set([input.listingId]);
-    } else if (input?.podId) {
+    } else if (effectivePodIds) {
+      const podSet = new Set(effectivePodIds);
       filteredListingIds = new Set(
-        allListings.filter((l) => (l as any).podId === input.podId).map((l) => l.id)
+        allListings.filter((l) => podSet.has((l as any).podId)).map((l) => l.id)
       );
     } else if (input?.state) {
       filteredListingIds = new Set(
@@ -241,6 +251,7 @@ export const analyzeRouter = router({
       months: z.number().default(12),
       listingId: z.number().optional(),
       podId: z.number().optional(),
+      podIds: z.array(z.number()).optional(),
       timeRange: z.enum(["30d", "quarter", "year", "all"]).optional(),
       startDate: z.string().optional(),
       endDate: z.string().optional(),
@@ -251,9 +262,16 @@ export const analyzeRouter = router({
       const analyses = await getReviewAnalyses(input.listingId ? { listingId: input.listingId } : undefined);
       const analysisMap = new Map(analyses.map((a) => [a.reviewId, a]));
 
-      // Apply pod filter
-      if (input.podId) {
-        const podListingIds = new Set(allListingsForTrends.filter((l) => (l as any).podId === input.podId).map((l) => l.id));
+      // Apply pod filter (multi-select)
+      const effectivePodIds =
+        input.podIds && input.podIds.length > 0
+          ? input.podIds
+          : input.podId
+            ? [input.podId]
+            : null;
+      if (effectivePodIds) {
+        const podSet = new Set(effectivePodIds);
+        const podListingIds = new Set(allListingsForTrends.filter((l) => podSet.has((l as any).podId)).map((l) => l.id));
         reviews = reviews.filter((r) => podListingIds.has(r.listingId));
       }
 
@@ -406,6 +424,7 @@ export const analyzeRouter = router({
     .input(z.object({
       listingId: z.number().optional(),
       podId: z.number().optional(),
+      podIds: z.array(z.number()).optional(),
       severity: z.string().optional(),
       limit: z.number().default(100),
       timeRange: z.enum(["30d", "quarter", "year", "all"]).optional(),
@@ -419,9 +438,16 @@ export const analyzeRouter = router({
         flaggedOnly: true,
         limit: input.limit,
       });
-      // Apply pod filter
-      if (input.podId) {
-        const podListingIds = new Set(allListingsForFlagged.filter((l) => (l as any).podId === input.podId).map((l) => l.id));
+      // Apply pod filter (multi-select)
+      const effectivePodIdsFlagged =
+        input.podIds && input.podIds.length > 0
+          ? input.podIds
+          : input.podId
+            ? [input.podId]
+            : null;
+      if (effectivePodIdsFlagged) {
+        const podSet = new Set(effectivePodIdsFlagged);
+        const podListingIds = new Set(allListingsForFlagged.filter((l) => podSet.has((l as any).podId)).map((l) => l.id));
         reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => podListingIds.has(r.listingId));
       }
 
@@ -470,6 +496,7 @@ export const analyzeRouter = router({
     .input(z.object({
       listingId: z.number().optional(),
       podId: z.number().optional(),
+      podIds: z.array(z.number()).optional(),
       timeRange: z.enum(["30d", "quarter", "year", "all"]).optional(),
       startDate: z.string().optional(),
       endDate: z.string().optional(),
@@ -492,12 +519,21 @@ export const analyzeRouter = router({
     }
     const timeEnd = input?.endDate ? new Date(new Date(input.endDate).setHours(23, 59, 59, 999)) : null;
 
+    // Normalise legacy single podId into podIds (comparison)
+    const effectivePodIdsCmp =
+      input?.podIds && input.podIds.length > 0
+        ? input.podIds
+        : input?.podId
+          ? [input.podId]
+          : null;
+
     // Filter by listing/pod/state
     let filteredListingIds: Set<number> | null = null;
     if (input?.listingId) {
       filteredListingIds = new Set([input.listingId]);
-    } else if (input?.podId) {
-      filteredListingIds = new Set(listings.filter((l) => (l as any).podId === input.podId).map((l) => l.id));
+    } else if (effectivePodIdsCmp) {
+      const podSet = new Set(effectivePodIdsCmp);
+      filteredListingIds = new Set(listings.filter((l) => podSet.has((l as any).podId)).map((l) => l.id));
     } else if (input?.state) {
       filteredListingIds = new Set(listings.filter((l) => l.state === input.state).map((l) => l.id));
     }
@@ -599,6 +635,7 @@ export const analyzeRouter = router({
     .input(z.object({
       listingId: z.number().optional(),
       podId: z.number().optional(),
+      podIds: z.array(z.number()).optional(),
       source: z.string().optional(),
       sentiment: z.string().optional(),
       minRating: z.number().optional(),
@@ -615,9 +652,16 @@ export const analyzeRouter = router({
       let reviewsWithAnalysis = await getReviewsWithAnalysis({
         listingId: input.listingId,
       });
-      // Apply pod filter
-      if (input.podId) {
-        const podListingIds = new Set(allListingsForFeed.filter((l) => (l as any).podId === input.podId).map((l) => l.id));
+      // Apply pod filter (multi-select)
+      const effectivePodIdsFeed =
+        input.podIds && input.podIds.length > 0
+          ? input.podIds
+          : input.podId
+            ? [input.podId]
+            : null;
+      if (effectivePodIdsFeed) {
+        const podSet = new Set(effectivePodIdsFeed);
+        const podListingIds = new Set(allListingsForFeed.filter((l) => podSet.has((l as any).podId)).map((l) => l.id));
         reviewsWithAnalysis = reviewsWithAnalysis.filter((r) => podListingIds.has(r.listingId));
       }
 
