@@ -85,23 +85,40 @@ function shouldCreateTask(msg: GuestMessage): boolean {
   if (!msg.aiAnalyzed) return false;
   // Only create tasks from incoming guest messages, never from host-sent messages
   if (msg.isIncoming === false) return false;
-  // Create task for actionable categories (maintenance, cleaning, improvement)
-  if (msg.aiCategory && TASK_TRIGGER_CATEGORIES.has(msg.aiCategory)) return true;
-  // Create task for critical urgency only (escalation situations)
-  if (msg.aiUrgency === "critical") return true;
 
-  // KEYWORD OVERRIDE: If AI classified as "question" or "other" but the message
-  // body contains maintenance-related keywords, override and create a task.
+  // Raise the bar: require urgency >= medium AND a concrete action/issue the
+  // AI was able to identify. Low-urgency chatter and vague complaints don't
+  // create a task — the team already handles those live in Hostaway.
+  const urgency = msg.aiUrgency;
+  const urgencyQualifies = urgency === "medium" || urgency === "high" || urgency === "critical";
+  const hasConcreteAction =
+    (msg.aiIssues && msg.aiIssues.length > 0) ||
+    (msg.aiActionItems && msg.aiActionItems.length > 0);
+
+  // 1) AI says this is a real property issue (maintenance / cleaning / improvement)
+  if (msg.aiCategory && TASK_TRIGGER_CATEGORIES.has(msg.aiCategory)) {
+    if (!urgencyQualifies) return false;
+    if (!hasConcreteAction) return false;
+    return true;
+  }
+
+  // 2) Critical urgency always creates a task (e.g. safety / lockout)
+  if (urgency === "critical") return true;
+
+  // 3) Keyword override: AI classified as "question" / "other" but the body
+  //    contains maintenance-style vocabulary — still needs a concrete action
+  //    and medium+ urgency to avoid pre-arrival "what's the wifi?" noise.
   if (msg.aiCategory === "question" || msg.aiCategory === "other") {
     if (bodyContainsKeyword(msg.body, MAINTENANCE_OVERRIDE_KEYWORDS)) {
-      return true;
+      if (urgencyQualifies && hasConcreteAction) return true;
     }
   }
 
-  // ESCALATION OVERRIDE: If message contains escalation language, always create a task.
-  if (bodyContainsKeyword(msg.body, ESCALATION_KEYWORDS)) {
-    return true;
-  }
+  // Escalation keywords (refund / lawyer / disappointed) are INTENTIONALLY not a
+  // standalone trigger anymore. If the guest is venting about something that
+  // can't be fixed for future guests (e.g. weather), no task is needed. If they
+  // are flagging a concrete fixable issue (torn carpet, broken AC), the AI
+  // will have tagged it maintenance/cleaning/improvement and path 1 applies.
 
   return false;
 }
@@ -389,10 +406,60 @@ async function createTasksFromAnalyzedMessages(): Promise<{
     .orderBy(desc(guestMessages.sentAt))
     .limit(200);
 
+  // Cache reservation arrival/departure lookups across messages
+  const reservationCache = new Map<
+    string,
+    { arrivalDate?: Date; departureDate?: Date } | null
+  >();
+
+  async function getReservationDates(
+    reservationId: string | null | undefined
+  ): Promise<{ arrivalDate?: Date; departureDate?: Date } | null> {
+    if (!reservationId) return null;
+    if (reservationCache.has(reservationId)) {
+      return reservationCache.get(reservationId) ?? null;
+    }
+    let result: { arrivalDate?: Date; departureDate?: Date } | null = null;
+    try {
+      const hwClient = getHostawayClient();
+      if (hwClient) {
+        const reservation = await hwClient.getReservation(Number(reservationId));
+        if (reservation) {
+          result = {
+            arrivalDate: reservation.arrivalDate
+              ? new Date(reservation.arrivalDate)
+              : undefined,
+            departureDate: reservation.departureDate
+              ? new Date(reservation.departureDate)
+              : undefined,
+          };
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[TaskCreator] Failed to fetch reservation dates for ${reservationId}:`,
+        err
+      );
+    }
+    reservationCache.set(reservationId, result);
+    return result;
+  }
+
   // Group by conversation ID to handle deduplication
   const byConversation = new Map<string, GuestMessage[]>();
   for (const msg of actionableMessages) {
     if (!shouldCreateTask(msg)) continue;
+
+    // Pre-arrival skip: if the message was sent before the guest checked in,
+    // it's almost always a "what's the wifi / where do I park" style question
+    // that the team handles live. Only post-arrival issues become tasks.
+    if (msg.hostawayReservationId && msg.sentAt) {
+      const resDates = await getReservationDates(msg.hostawayReservationId);
+      if (resDates?.arrivalDate && new Date(msg.sentAt) < resDates.arrivalDate) {
+        continue;
+      }
+    }
+
     const convId = msg.hostawayConversationId;
     if (!byConversation.has(convId)) {
       byConversation.set(convId, []);
@@ -479,20 +546,13 @@ async function createTasksFromAnalyzedMessages(): Promise<{
         || msgs.find((m) => m.hostawayReservationId)?.hostawayReservationId
         || null;
 
-      // Fetch arrival/departure dates from Hostaway reservation
+      // Use cached arrival/departure dates from Hostaway reservation
       let arrivalDate: Date | undefined;
       let departureDate: Date | undefined;
       if (reservationId) {
-        try {
-          const hwClient = getHostawayClient();
-          if (hwClient) {
-            const reservation = await hwClient.getReservation(Number(reservationId));
-            if (reservation?.arrivalDate) arrivalDate = new Date(reservation.arrivalDate);
-            if (reservation?.departureDate) departureDate = new Date(reservation.departureDate);
-          }
-        } catch (err) {
-          console.error(`[TaskCreator] Failed to fetch reservation dates for ${reservationId}:`, err);
-        }
+        const resDates = await getReservationDates(reservationId);
+        arrivalDate = resDates?.arrivalDate;
+        departureDate = resDates?.departureDate;
       }
 
       // Set 72-hour monitoring window from now
@@ -673,4 +733,148 @@ export async function pushTaskToBreezeway(
       error: `Breezeway API error: ${err.message}`,
     };
   }
+}
+
+// ── Retroactive Cleanup ────────────────────────────────────────────────
+
+export interface CleanupResult {
+  scanned: number;
+  cleaned: number;
+  skipped: number;
+  errors: number;
+  cleanedTaskIds: number[];
+}
+
+/**
+ * Re-evaluate existing open guest_message tasks against the tightened
+ * shouldCreateTask rules and the pre-arrival skip. Any task that wouldn't be
+ * created under the current rules is moved to status="ignored" with a note.
+ *
+ * Scope:
+ * - Only guest_message tasks
+ * - Only status in ("created", "in_progress")
+ * - Only resolutionStatus == "monitoring" OR null (don't touch already-resolved)
+ * - Skip tasks that have already been pushed to Breezeway (breezewayTaskId set)
+ *   — those are now owned by the ops team there.
+ */
+export async function cleanupStaleGuestMessageTasks(): Promise<CleanupResult> {
+  const db = await getDb();
+  if (!db) {
+    return { scanned: 0, cleaned: 0, skipped: 0, errors: 0, cleanedTaskIds: [] };
+  }
+
+  let scanned = 0;
+  let cleaned = 0;
+  let skipped = 0;
+  let errors = 0;
+  const cleanedTaskIds: number[] = [];
+
+  const candidates = await db
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.source, "guest_message"),
+        isNull(tasks.breezewayTaskId),
+        inArray(tasks.status, ["created", "in_progress"] as any)
+      )
+    );
+
+  const reservationCache = new Map<
+    string,
+    { arrivalDate?: Date; departureDate?: Date } | null
+  >();
+
+  async function getResDates(resId: string | null | undefined) {
+    if (!resId) return null;
+    if (reservationCache.has(resId)) return reservationCache.get(resId) ?? null;
+    let result: { arrivalDate?: Date; departureDate?: Date } | null = null;
+    try {
+      const hw = getHostawayClient();
+      if (hw) {
+        const r = await hw.getReservation(Number(resId));
+        if (r) {
+          result = {
+            arrivalDate: r.arrivalDate ? new Date(r.arrivalDate) : undefined,
+            departureDate: r.departureDate ? new Date(r.departureDate) : undefined,
+          };
+        }
+      }
+    } catch {}
+    reservationCache.set(resId, result);
+    return result;
+  }
+
+  for (const task of candidates) {
+    scanned++;
+    try {
+      // Only target monitoring-state (auto-created, not yet acted on)
+      if (
+        task.resolutionStatus &&
+        task.resolutionStatus !== "monitoring"
+      ) {
+        skipped++;
+        continue;
+      }
+
+      // Fetch messages linked to this task
+      const linked = await db
+        .select()
+        .from(guestMessages)
+        .where(eq(guestMessages.taskId, task.id));
+
+      if (linked.length === 0) {
+        skipped++;
+        continue;
+      }
+
+      // Arrival anchor for pre-arrival check (stored on task, or fetched)
+      let arrival: Date | undefined = task.arrivalDate
+        ? new Date(task.arrivalDate as any)
+        : undefined;
+      if (!arrival && task.hostawayReservationId) {
+        const r = await getResDates(task.hostawayReservationId);
+        arrival = r?.arrivalDate;
+      }
+
+      // Would ANY linked message pass the new rules?
+      const anyQualifies = linked.some((m) => {
+        if (!shouldCreateTask(m)) return false;
+        if (arrival && m.sentAt && new Date(m.sentAt) < arrival) return false;
+        return true;
+      });
+
+      if (anyQualifies) {
+        skipped++;
+        continue;
+      }
+
+      // No message qualifies under the new rules → mark ignored
+      await db
+        .update(tasks)
+        .set({
+          status: "ignored" as any,
+          resolutionStatus: "auto_resolved" as any,
+          resolutionReason:
+            "Retroactively closed: no linked guest message meets the tightened task-creation rules (post-arrival, medium+ urgency, concrete action).",
+          resolvedAt: new Date(),
+        })
+        .where(eq(tasks.id, task.id));
+
+      cleaned++;
+      cleanedTaskIds.push(task.id);
+    } catch (err: any) {
+      console.error(
+        `[TaskCreator] cleanupStaleGuestMessageTasks error on task ${task.id}:`,
+        err.message
+      );
+      errors++;
+    }
+  }
+
+  console.log(
+    `[TaskCreator] Cleanup complete: scanned=${scanned} cleaned=${cleaned} skipped=${skipped} errors=${errors}`
+  );
+
+  return { scanned, cleaned, skipped, errors, cleanedTaskIds };
 }

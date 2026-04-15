@@ -2421,6 +2421,18 @@ export default function Tasks() {
     },
   });
 
+  const cleanupStaleTasks = trpc.tasks.cleanupStaleGuestMessageTasks.useMutation({
+    onSuccess: (data) => {
+      toast.success(
+        `Cleanup: scanned ${data.scanned}, closed ${data.cleaned}, skipped ${data.skipped}${data.errors ? `, errors ${data.errors}` : ""}`
+      );
+      utils.tasks.list.invalidate();
+    },
+    onError: (err) => {
+      toast.error(`Cleanup failed: ${err.message}`);
+    },
+  });
+
   const triggerReviewPipeline = trpc.tasks.triggerReviewPipeline.useMutation({
     onSuccess: (data) => {
       if (data.started) {
@@ -2757,6 +2769,29 @@ export default function Tasks() {
                     : "Run Review Pipeline"}
                 </Button>
               </>
+            )}
+            {permissions.isManagerOrAbove && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={cleanupStaleTasks.isPending}
+                onClick={() => {
+                  if (
+                    confirm(
+                      "Re-evaluate all open guest-message tasks against the tightened rules and close stale ones? This will mark tasks as 'ignored' if no linked message meets the new bar (post-arrival, medium+ urgency, concrete action)."
+                    )
+                  ) {
+                    cleanupStaleTasks.mutate();
+                  }
+                }}
+              >
+                {cleanupStaleTasks.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Archive className="h-4 w-4 mr-2" />
+                )}
+                Cleanup Stale Tasks
+              </Button>
             )}
             {permissions.isManagerOrAbove && (
               <Button

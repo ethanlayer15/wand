@@ -40,7 +40,7 @@ import { ENV } from "./_core/env";
 import { sendSlackNotification, checkAndNotifyUnassignedSdts } from "./sdtNotifier";
 import { checkAndNotifyLastMinuteChanges } from "./lastMinuteNotifier";
 import { updateIntegrationStatus } from "./db";
-import { pushTaskToBreezeway, startGuestMessagePipelineJob, getPipelineJobStatus } from "./taskCreator";
+import { pushTaskToBreezeway, startGuestMessagePipelineJob, getPipelineJobStatus, cleanupStaleGuestMessageTasks } from "./taskCreator";
 import {
   startReviewPipelineJob,
   getReviewPipelineJobStatus,
@@ -364,6 +364,10 @@ export const appRouter = router({
 
     triggerGuestMessagePipeline: managerProcedure.mutation(async () => {
       return startGuestMessagePipelineJob();
+    }),
+
+    cleanupStaleGuestMessageTasks: managerProcedure.mutation(async () => {
+      return cleanupStaleGuestMessageTasks();
     }),
 
     pipelineStatus: managerProcedure.query(async () => {
