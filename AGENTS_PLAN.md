@@ -127,3 +127,82 @@ Make the bots useful before making them autonomous.
 - Watched-channels list per agent (which Slack channels Wanda / Starry read passively for the proactive sweep)
 - Gmail inboxes per agent (shared `ops@` style or per-person delegated)
 - Confidence threshold for Phase 5 auto-send (start strict, loosen after 2 weeks of clean drafts)
+
+---
+
+## Decoupling from Manus (target: between Phase 1 and Phase 2, OR between Phase 4 and Phase 5)
+
+Wand was originally built on Manus and still has two real Manus dependencies:
+the **TiDB database** (provisioned by Manus, no direct admin access — can't even
+rotate the password without filing a support ticket) and the **legacy OAuth
+callback handler** at `/api/oauth/callback` (`server/_core/oauth.ts`). Hosting
+moved to Railway long ago; AI, storage, Hostaway, Breezeway, Stripe, Quo are
+all on our own accounts. So the migration is smaller than it looks.
+
+### Why move
+
+- Can't rotate the TiDB password ourselves (Manus owns the cluster credentials)
+- Manus pricing / availability is outside our control
+- One less vendor in the critical path before Phase 5 graduates agents to
+  autonomous send-on-behalf-of workflows — fewer surprise outages
+
+### What's already done
+
+- **Google OAuth is live** as the primary login. `server/googleAuth.ts` runs
+  the full flow, restricted to `@leisrstays.com`. The Login page only shows
+  "Sign in with Google" — nobody is using the Manus path interactively.
+- All non-Manus integrations (Hostaway, Breezeway, AWS S3, Anthropic,
+  OpenAI, Stripe, Openphone, Slack, Gmail) are on our own credentials in
+  Railway env vars.
+
+### What remains (estimate: 2–3 focused days)
+
+1. **Provision a non-Manus MySQL** — either Railway's MySQL plugin (~$5/mo,
+   simplest) or PlanetScale (free tier, more reliable, branchable). Pick
+   one and create the empty DB.
+2. **Cutover the data**:
+   - Take a brief write freeze (~10 min — disable cron + agent triggers)
+   - `mysqldump` the entire TiDB DB → restore to the new DB
+   - Update `DATABASE_URL` in Railway env → redeploy
+   - Smoke-test: load Tasks board, run a manual sync, confirm task counts
+     match
+   - Re-enable cron + agents
+3. **Remove the Manus OAuth handler**:
+   - Delete `server/_core/oauth.ts` and the `registerOAuthRoutes(app)` call
+     in `server/_core/index.ts`
+   - Drop `OAUTH_SERVER_URL` and `OWNER_OPEN_ID` from `server/_core/env.ts`
+     and Railway env vars
+   - Audit `server/db.ts` and any other module that references those env
+     vars or the legacy openId convention
+4. **Sanity check `users.openId`**:
+   - Most rows should already be Google `sub` IDs from existing logins
+   - If any rows are still legacy Manus IDs, ask those team members to log
+     out and back in once with Google — `googleAuth.ts` should match by
+     email and update the `openId`
+5. **Decommission Manus**:
+   - Cancel the Manus subscription / project
+   - Save a `mysqldump` snapshot of the TiDB DB to S3 as a one-time backup
+     before the Manus project is deleted
+
+### Risk + rollback
+
+- The DB cutover is the only step with real downtime. Have the old
+  `DATABASE_URL` ready to paste back into Railway as instant rollback if
+  anything looks off after the switch.
+- Auth removal is reversible — just don't delete the Manus account until
+  you've run a week with the legacy OAuth handler removed and nobody has
+  reported being locked out.
+
+### Why "between Phase 1 and Phase 2" is appealing
+
+Doing the migration before the agents start writing autonomously means
+Phases 5+ run on infra we fully control — no surprise Manus outage takes
+down a guest-facing auto-send flow. The downside is a 2–3 day delay before
+starting Phase 2.
+
+### Why "between Phase 4 and Phase 5" is also reasonable
+
+By that point we have ~2 months more code on the platform, we know exactly
+which modules touch Manus, and the autonomous workflows are the first real
+business risk that justifies the cutover effort. Choose based on appetite
+for delay vs appetite for vendor risk.
