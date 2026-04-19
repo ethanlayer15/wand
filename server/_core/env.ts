@@ -37,4 +37,9 @@ export const ENV = {
   // Google OAuth
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+  // Slack agent apps (Phase 1) — one app per agent, separate bot user + secret.
+  slackWandaBotToken: process.env.SLACK_WANDA_BOT_TOKEN ?? "",
+  slackWandaSigningSecret: process.env.SLACK_WANDA_SIGNING_SECRET ?? "",
+  slackStarryBotToken: process.env.SLACK_STARRY_BOT_TOKEN ?? "",
+  slackStarrySigningSecret: process.env.SLACK_STARRY_SIGNING_SECRET ?? "",
 };

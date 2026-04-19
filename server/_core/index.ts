@@ -10,6 +10,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAuthRoutes } from "../googleAuth";
 import { startCronJobs } from "../cron";
 import { stripeWebhookRouter } from "../stripeWebhook";
+import { registerSlackAgentRoutes } from "../agents/slackApp";
 
 // Webhook router uses raw body parsing — must import default Router export
 import webhookRouterModule from "../webhooks";
@@ -23,6 +24,10 @@ const isDev = process.env.NODE_ENV !== "production";
 async function startServer() {
   // Stripe webhooks need raw body — mount BEFORE json middleware
   app.use("/api/stripe", express.raw({ type: "application/json" }), stripeWebhookRouter);
+
+  // Slack agent endpoints (Wanda, Starry) need raw body for signature verification.
+  // Must also be mounted BEFORE express.json().
+  registerSlackAgentRoutes(app);
 
   // Standard JSON body parser for everything else
   app.use(express.json({ limit: "50mb" }));

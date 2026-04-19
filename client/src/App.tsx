@@ -19,6 +19,7 @@ import TeamManagement from "@/pages/TeamManagement";
 import NotFound from "@/pages/NotFound";
 import CleanerDashboard from "@/pages/CleanerDashboard";
 import OpsInbox from "@/pages/OpsInbox";
+import OnCall from "@/pages/OnCall";
 import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -131,6 +132,9 @@ function Router() {
               </Route>
               <Route path="/ops-inbox">
                 <OpsInbox />
+              </Route>
+              <Route path="/on-call">
+                <RequireRole minRole="manager"><OnCall /></RequireRole>
               </Route>
               <Route path="/settings">
                 <RequireRole minRole="admin"><Settings /></RequireRole>

@@ -40,6 +40,7 @@ import {
   UsersRound,
   Wrench,
   Inbox,
+  CalendarClock,
 } from "lucide-react";
 
 // Conductor's wand with AI sparkle — LeisrStays brand mark for Wand
@@ -147,6 +148,12 @@ export const mainNavItems: NavItem[] = [
     icon: Inbox,
     label: "Ops Inbox",
     path: "/ops-inbox",
+    minRole: "manager",
+  },
+  {
+    icon: CalendarClock,
+    label: "On-Call",
+    path: "/on-call",
     minRole: "manager",
   },
 ];

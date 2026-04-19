@@ -170,6 +170,11 @@ export const tasks = mysqlTable("tasks", {
   hostawayReservationId: varchar("hostawayReservationId", { length: 128 }),
   arrivalDate: timestamp("arrivalDate"),
   departureDate: timestamp("departureDate"),
+  // Board + visibility (Phase 1: department kanbans + private tasks)
+  boardId: int("boardId"), // FK → boards.id; nullable for legacy rows (default board applied via backfill)
+  visibility: mysqlEnum("visibility", ["board", "private"]).default("board").notNull(),
+  ownerUserId: int("ownerUserId"), // FK → users.id; required when visibility="private"
+  ownerAgent: mysqlEnum("ownerAgent", ["wanda", "starry"]), // which agent owns the private task surface
   // Auto-resolution detection fields
   resolutionStatus: mysqlEnum("resolutionStatus", ["monitoring", "likely_resolved", "auto_resolved", "reopened"])
     .default("monitoring"),
@@ -1116,3 +1121,105 @@ export const propertyPlaybooks = mysqlTable("propertyPlaybooks", {
 
 export type PropertyPlaybook = typeof propertyPlaybooks.$inferSelect;
 export type InsertPropertyPlaybook = typeof propertyPlaybooks.$inferInsert;
+
+/**
+ * Boards — department kanbans.
+ *
+ * Each board has its own column config and source filters. Tasks belong to
+ * exactly one board (when visibility="board"). Private tasks have no board
+ * but do carry an ownerUserId + ownerAgent.
+ *
+ * Seeded with three rows:
+ *   - "Leisr Ops"  (slug: leisr_ops)   — current default for all legacy tasks
+ *   - "Leisr Mgmt" (slug: leisr_mgmt)
+ *   - "5STR Ops"   (slug: fivestr_ops)
+ */
+export const boards = mysqlTable("boards", {
+  id: int("id").autoincrement().primaryKey(),
+  slug: varchar("slug", { length: 64 }).notNull().unique(),
+  name: varchar("name", { length: 128 }).notNull(),
+  department: mysqlEnum("department", ["leisr_ops", "leisr_mgmt", "fivestr_ops"]).notNull(),
+  agent: mysqlEnum("agent", ["wanda", "starry"]).notNull(), // which agent feeds this board
+  // Source toggles — agents check these before auto-creating tasks for this board
+  sourcesEnabled: json("sourcesEnabled").$type<{
+    guestMessages?: boolean;
+    reviews?: boolean;
+    breezeway?: boolean;
+    slack?: boolean;
+    gmail?: boolean;
+    openphone?: boolean;
+  }>(),
+  // Column ordering (statuses to display + order). Falls back to default task statuses if null.
+  columnConfig: json("columnConfig").$type<Array<{ status: string; label: string }>>(),
+  // Channel routing (for Slack agent posts about this board)
+  slackChannelId: varchar("slackChannelId", { length: 64 }),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Board = typeof boards.$inferSelect;
+export type InsertBoard = typeof boards.$inferInsert;
+
+/**
+ * On-Call Schedule — who is responsible for a department/role at a given time.
+ *
+ * Read by Starry (and Wanda) when routing escalations. The simplest workable
+ * shape: discrete shift rows with a start/end timestamp. Recurring shifts are
+ * expanded into rows by the admin UI when scheduled.
+ *
+ * Lookup: getOnCall({ department, role?, at? }) returns the user whose shift
+ * contains `at` (default: now). If multiple match, the most recently created
+ * shift wins.
+ */
+export const onCallSchedule = mysqlTable("onCallSchedule", {
+  id: int("id").autoincrement().primaryKey(),
+  department: mysqlEnum("department", ["leisr_ops", "leisr_mgmt", "fivestr_ops"]).notNull(),
+  role: varchar("role", { length: 64 }).default("primary").notNull(), // "primary", "backup", "guest_relations", etc.
+  userId: int("userId").notNull(), // FK → users.id
+  startsAt: timestamp("startsAt").notNull(),
+  endsAt: timestamp("endsAt").notNull(),
+  notes: text("notes"),
+  // Slack DM target — usually derived from users.openId, but explicit override allowed
+  slackUserId: varchar("slackUserId", { length: 64 }),
+  createdBy: int("createdBy"), // FK → users.id
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type OnCallShift = typeof onCallSchedule.$inferSelect;
+export type InsertOnCallShift = typeof onCallSchedule.$inferInsert;
+
+/**
+ * Slack agent identity + per-user mapping.
+ *
+ * `slackBots` holds one row per Slack app we install (Wanda, Starry) with the
+ * bot token + signing secret refs. `slackUserLinks` connects a Wand user to
+ * their Slack user_id so agents can DM them about their tasks.
+ */
+export const slackBots = mysqlTable("slackBots", {
+  id: int("id").autoincrement().primaryKey(),
+  agent: mysqlEnum("agent", ["wanda", "starry"]).notNull().unique(),
+  workspaceId: varchar("workspaceId", { length: 64 }).notNull(),
+  botUserId: varchar("botUserId", { length: 64 }).notNull(),
+  // Tokens stored as env-var refs (e.g. "SLACK_WANDA_BOT_TOKEN") — actual secrets in Railway env.
+  botTokenRef: varchar("botTokenRef", { length: 128 }).notNull(),
+  signingSecretRef: varchar("signingSecretRef", { length: 128 }).notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type SlackBot = typeof slackBots.$inferSelect;
+export type InsertSlackBot = typeof slackBots.$inferInsert;
+
+export const slackUserLinks = mysqlTable("slackUserLinks", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(), // FK → users.id
+  workspaceId: varchar("workspaceId", { length: 64 }).notNull(),
+  slackUserId: varchar("slackUserId", { length: 64 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type SlackUserLink = typeof slackUserLinks.$inferSelect;
+export type InsertSlackUserLink = typeof slackUserLinks.$inferInsert;

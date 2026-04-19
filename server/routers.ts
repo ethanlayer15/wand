@@ -36,6 +36,8 @@ import { cleanerDashboardRouter } from "./cleanerDashboardRouter";
 import { cleaningReportsRouter } from "./cleaningReportsRouter";
 import { payrollRouter } from "./payrollRouter";
 import { agentRouter } from "./agentRouter";
+import { boardsRouter } from "./boardsRouter";
+import { onCallRouter } from "./onCallRouter";
 import { ENV } from "./_core/env";
 import { sendSlackNotification, checkAndNotifyUnassignedSdts } from "./sdtNotifier";
 import { checkAndNotifyLastMinuteChanges } from "./lastMinuteNotifier";
@@ -64,6 +66,8 @@ export const appRouter = router({
   cleaningReports: cleaningReportsRouter,
   payroll: payrollRouter,
   agent: agentRouter,
+  boards: boardsRouter,
+  onCall: onCallRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
