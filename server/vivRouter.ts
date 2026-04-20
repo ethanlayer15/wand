@@ -909,6 +909,8 @@ export const vivRouter = router({
       });
 
       const { tasks } = await import("../drizzle/schema");
+      const { getDefaultBoardId } = await import("./db");
+      const boardId = await getDefaultBoardId();
       await db.insert(tasks).values({
         title: extraction.title,
         description: extraction.description,
@@ -918,6 +920,7 @@ export const vivRouter = router({
         source: "manual",
         dueDate: extraction.dueDate ? new Date(extraction.dueDate) : undefined,
         assignedTo: extraction.contactEmail,
+        boardId: boardId ?? undefined,
       });
 
       return { success: true };

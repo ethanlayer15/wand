@@ -558,6 +558,9 @@ async function createTasksFromAnalyzedMessages(): Promise<{
       // Set 72-hour monitoring window from now
       const monitoringExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
 
+      const { getDefaultBoardId } = await import("./db");
+      const boardId = await getDefaultBoardId();
+
       const taskValues: typeof tasks.$inferInsert = {
         externalId: convId,
         externalSource: "hostaway",
@@ -574,6 +577,7 @@ async function createTasksFromAnalyzedMessages(): Promise<{
         departureDate,
         resolutionStatus: "monitoring",
         monitoringExpiresAt,
+        boardId: boardId ?? undefined,
       };
 
       const [insertResult] = await db.insert(tasks).values(taskValues);
