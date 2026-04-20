@@ -192,6 +192,29 @@ export async function getDb() {
       } catch (e: any) {
         console.warn("[Database] Agent tables migration:", e.message);
       }
+
+      // ── Backfill: any tasks without a board → Leisr Ops ──────────────
+      // Phase 2 introduced board filtering; tasks created via paths that
+      // don't set boardId default to NULL and disappear from per-board
+      // views. Idempotent — safe to run on every boot.
+      try {
+        const [r] = await _pool
+          .promise()
+          .query(
+            `UPDATE tasks
+                SET boardId = (SELECT id FROM boards WHERE slug = 'leisr_ops')
+              WHERE boardId IS NULL`
+          );
+        const affected = (r as any)?.affectedRows ?? 0;
+        if (affected > 0) {
+          console.log(`[Database] Backfilled boardId for ${affected} task(s) → leisr_ops`);
+        }
+      } catch (e: any) {
+        // boards table not present yet (first boot before Phase 1 migration)
+        if (!e.message?.includes("doesn't exist")) {
+          console.warn("[Database] Board backfill skipped:", e.message);
+        }
+      }
     } catch (error) {
       console.warn("[Database] Failed to create pool:", error);
       _db = null;
@@ -199,6 +222,35 @@ export async function getDb() {
     }
   }
   return _db;
+}
+
+/**
+ * Default board id for newly-created tasks (Leisr Ops).
+ *
+ * Memoized after first lookup. Used by every task-insert path to ensure
+ * tasks never land with boardId=NULL (which makes them invisible in
+ * per-board kanban views).
+ */
+let _defaultBoardId: number | null = null;
+export async function getDefaultBoardId(): Promise<number | null> {
+  if (_defaultBoardId !== null) return _defaultBoardId;
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const { boards } = await import("../drizzle/schema");
+    const rows = await db
+      .select({ id: boards.id })
+      .from(boards)
+      .where(eq(boards.slug, "leisr_ops"))
+      .limit(1);
+    if (rows.length > 0) {
+      _defaultBoardId = rows[0].id;
+      return _defaultBoardId;
+    }
+  } catch (err: any) {
+    console.warn("[Database] getDefaultBoardId failed:", err.message);
+  }
+  return null;
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
@@ -544,6 +596,7 @@ export async function createTask(data: {
   const db = await getDb();
   if (!db) return { success: false };
   const isUrgent = data.priority === "urgent";
+  const boardId = await getDefaultBoardId();
   const result = await db.insert(tasks).values({
     title: data.title,
     description: data.description,
@@ -555,6 +608,7 @@ export async function createTask(data: {
     status: data.status || "created",
     source: "wand_manual",
     category: "maintenance",
+    boardId: boardId ?? undefined,
   });
   const insertId = (result as any)[0]?.insertId;
   return { success: true, id: insertId };
@@ -1242,6 +1296,7 @@ export async function upsertBreezewayTask(data: {
   }
 
   // Insert new task
+  const boardId = await getDefaultBoardId();
   const result = await db.insert(tasks).values({
     breezewayTaskId: data.breezewayTaskId,
     breezewayHomeId: data.breezewayHomeId,
@@ -1260,6 +1315,7 @@ export async function upsertBreezewayTask(data: {
     dueDate: data.dueDate,
     hiddenFromBoard: false,
     breezewayCreatorName: data.breezewayCreatorName,
+    boardId: boardId ?? undefined,
   });
   return { id: result[0].insertId, action: "created" as const };
 }

@@ -2277,20 +2277,19 @@ export default function Tasks() {
   const [showMyTasks, setShowMyTasks] = useState(false);
 
   // Board filter — top-level switch between department kanbans (Phase 2).
-  // `null` means "All Boards"; a number is the board id.
-  // Persists in localStorage so the default sticks across sessions.
+  // Always a board id (no "all" option). Defaults to Leisr Ops on first load,
+  // then sticks across sessions via localStorage.
   const [boardFilter, setBoardFilter] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
     const v = window.localStorage.getItem("wand.boardFilter");
-    if (v === null) return null;
-    if (v === "all") return null;
+    if (!v || v === "all") return null;
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   });
-  const setBoardFilterPersisted = (v: number | null) => {
+  const setBoardFilterPersisted = (v: number) => {
     setBoardFilter(v);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("wand.boardFilter", v === null ? "all" : String(v));
+      window.localStorage.setItem("wand.boardFilter", String(v));
     }
   };
 
@@ -2298,6 +2297,15 @@ export default function Tasks() {
   const { data: podsData = [] } = trpc.pods.list.useQuery();
   // Boards data for filtering + the board switcher tab strip
   const { data: boardsData = [] } = trpc.boards.list.useQuery();
+
+  // First-load default: pin to Leisr Ops as soon as boards arrive.
+  useEffect(() => {
+    if (boardFilter !== null) return;
+    if (boardsData.length === 0) return;
+    const leisr = boardsData.find((b: any) => b.slug === "leisr_ops");
+    setBoardFilterPersisted(leisr?.id ?? boardsData[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardsData]);
 
   // Detail sheet state
   const [detailTask, setDetailTask] = useState<TaskType | null>(null);
@@ -2883,18 +2891,6 @@ export default function Tasks() {
         {/* Board switcher (Phase 2 — department kanbans) */}
         {boardsData.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setBoardFilterPersisted(null)}
-              className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
-                boardFilter === null
-                  ? "bg-foreground text-background border-foreground"
-                  : "bg-background hover:bg-accent border-input text-muted-foreground"
-              }`}
-            >
-              All Boards
-              <span className="ml-1.5 opacity-60">{activeTasks.length}</span>
-            </button>
             {boardsData.map((b: any) => {
               const count = activeTasks.filter(
                 (t: any) => t.boardId === b.id

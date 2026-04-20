@@ -482,6 +482,9 @@ export async function createTasksFromReviews(): Promise<{
     }
 
     try {
+      const { getDefaultBoardId } = await import("./db");
+      const boardId = await getDefaultBoardId();
+
       const taskValues: typeof tasks.$inferInsert = {
         externalId: review.hostawayReviewId,
         externalSource: "hostaway",
@@ -496,6 +499,7 @@ export async function createTasksFromReviews(): Promise<{
         hostawayReservationId: review.hostawayReservationId || undefined,
         arrivalDate: review.arrivalDate || undefined,
         departureDate: review.departureDate || undefined,
+        boardId: boardId ?? undefined,
       };
 
       const result = await db.insert(tasks).values(taskValues);
