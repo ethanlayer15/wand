@@ -4,12 +4,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 describe("Google OAuth", () => {
   describe("Domain Restriction", () => {
+    const ALLOWED = ["leisrstays.com", "5strclean.com"];
+    const isAllowed = (email: string) =>
+      ALLOWED.some((d) => email.toLowerCase().endsWith(`@${d}`));
+
     it("should accept @leisrstays.com emails", () => {
-      const email = "alice@leisrstays.com";
-      expect(email.endsWith("@leisrstays.com")).toBe(true);
+      expect(isAllowed("alice@leisrstays.com")).toBe(true);
     });
 
-    it("should reject non-leisrstays.com emails", () => {
+    it("should accept @5strclean.com emails", () => {
+      expect(isAllowed("bob@5strclean.com")).toBe(true);
+    });
+
+    it("should reject non-allowed emails", () => {
       const emails = [
         "alice@gmail.com",
         "bob@yahoo.com",
@@ -17,13 +24,13 @@ describe("Google OAuth", () => {
         "admin@leisrstays.org",
       ];
       for (const email of emails) {
-        expect(email.endsWith("@leisrstays.com")).toBe(false);
+        expect(isAllowed(email)).toBe(false);
       }
     });
 
     it("should reject emails with domain as substring", () => {
-      const email = "user@notleisrstays.com";
-      expect(email.endsWith("@leisrstays.com")).toBe(false);
+      expect(isAllowed("user@notleisrstays.com")).toBe(false);
+      expect(isAllowed("user@not5strclean.com")).toBe(false);
     });
   });
 
@@ -66,25 +73,31 @@ describe("Google OAuth", () => {
 
 describe("Team Invitations", () => {
   describe("Email Validation", () => {
-    it("should validate @leisrstays.com emails for invitations", () => {
+    const INVITE_ALLOWED = ["leisrstays.com", "5strclean.com"];
+    const isInvitable = (email: string) =>
+      INVITE_ALLOWED.some((d) => email.endsWith(`@${d}`));
+
+    it("should validate @leisrstays.com and @5strclean.com emails", () => {
       const validEmails = [
         "alice@leisrstays.com",
         "bob.smith@leisrstays.com",
         "team+test@leisrstays.com",
+        "carol@5strclean.com",
+        "dave.cleaner@5strclean.com",
       ];
       for (const email of validEmails) {
-        expect(email.endsWith("@leisrstays.com")).toBe(true);
+        expect(isInvitable(email)).toBe(true);
       }
     });
 
-    it("should reject non-domain emails for invitations", () => {
+    it("should reject non-allowed-domain emails for invitations", () => {
       const invalidEmails = [
         "alice@gmail.com",
         "bob@company.com",
         "",
       ];
       for (const email of invalidEmails) {
-        expect(email.endsWith("@leisrstays.com")).toBe(false);
+        expect(isInvitable(email)).toBe(false);
       }
     });
   });
