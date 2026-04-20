@@ -298,10 +298,18 @@ function SlackLinkingCard({
 }) {
   const linksQuery = trpc.slackLinks.list.useQuery();
   const autoMatchMut = trpc.slackLinks.autoMatch.useMutation({
-    onSuccess: (data) => {
-      toast.success(
-        `Auto-match: ${data.matched} matched, ${data.alreadyLinked} already linked, ${data.skippedNoSlack} no Slack account, ${data.skippedNoEmail} no email`
-      );
+    onSuccess: (data: any) => {
+      const summary = `Auto-match: ${data.matched} matched, ${data.alreadyLinked} already linked, ${data.skippedNoSlack} no Slack account, ${data.skippedNoEmail} no email${
+        data.failed ? `, ${data.failed} failed` : ""
+      }`;
+      if (data.failed && data.errors?.length > 0) {
+        toast.error(summary);
+        for (const e of data.errors.slice(0, 3)) {
+          toast.error(`${e.email}: ${e.error}`);
+        }
+      } else {
+        toast.success(summary);
+      }
       linksQuery.refetch();
     },
     onError: (err) => toast.error(err.message),
