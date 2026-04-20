@@ -9,9 +9,9 @@
  * Slack open-DM, Wand task CRUD, etc.
  */
 import type Anthropic from "@anthropic-ai/sdk";
-import { and, desc, eq, lte, gte, or } from "drizzle-orm";
+import { and, desc, eq, like, lte, gte, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { boards, onCallSchedule, tasks, users } from "../../drizzle/schema";
+import { boards, listings, onCallSchedule, tasks, users } from "../../drizzle/schema";
 
 /**
  * Default board slug each agent owns. The reaction-to-task flow uses this
@@ -62,9 +62,25 @@ export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "findListing",
+    description:
+      "Search for a Wand listing (property) by name fragment. Use this BEFORE createTaskDraft whenever the message mentions a property — even loosely (e.g. 'Skylar', 'Kimble', 'the bunk room at Quo'). Returns up to 5 candidates with id + name. Pick the best match's id and pass it as listingId to createTaskDraft. If no good match comes back, omit listingId.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Substring to search for. Tries internal name first, then public name. Case-insensitive.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "createTaskDraft",
     description:
-      "Create a new Wand task on this agent's default board (Wanda → Leisr Ops, Starry → 5STR Ops). Use this when reacting to a Slack message or when the user explicitly asks for a task to be created. Always include a clear short imperative title, a useful description (with the original Slack quote when applicable), and an honest priority/category.",
+      "Create a new Wand task on this agent's default board (Wanda → Leisr Ops, Starry → 5STR Ops). Use this when reacting to a Slack message or when the user explicitly asks for a task to be created. Always include a clear short imperative title, a useful description (with the original Slack quote when applicable), and an honest priority/category. Whenever the message mentions a property, call findListing FIRST and pass the matched listingId so the task is associated with the right home (so it can be pushed to Breezeway later).",
     input_schema: {
       type: "object",
       properties: {
@@ -88,6 +104,11 @@ export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
           type: "string",
           enum: ["maintenance", "cleaning", "improvements"],
           description: "Category of task. Default to 'maintenance' if uncertain.",
+        },
+        listingId: {
+          type: "number",
+          description:
+            "Wand listing id from findListing. Pass when the message clearly references a specific property; omit when it's a generic / cross-property task.",
         },
       },
       required: ["title", "description"],
@@ -183,6 +204,39 @@ export async function runAgentTool({ name, input, agent, wandUserId }: RunToolAr
     };
   }
 
+  if (name === "findListing") {
+    const query = String(input?.query ?? "").trim();
+    if (!query) return { error: "query is required" };
+    const pattern = `%${query.toLowerCase()}%`;
+    const rows = await db
+      .select({
+        id: listings.id,
+        name: listings.name,
+        internalName: listings.internalName,
+        city: listings.city,
+        status: listings.status,
+      })
+      .from(listings)
+      .where(
+        or(
+          sql`LOWER(${listings.name}) LIKE ${pattern}`,
+          sql`LOWER(${listings.internalName}) LIKE ${pattern}`
+        )
+      )
+      .limit(5);
+    return {
+      query,
+      matches: rows.map((r) => ({
+        id: r.id,
+        displayName: r.internalName || r.name,
+        name: r.name,
+        internalName: r.internalName,
+        city: r.city,
+        status: r.status,
+      })),
+    };
+  }
+
   if (name === "createTaskDraft") {
     const title = String(input?.title ?? "").slice(0, 200).trim();
     const description = String(input?.description ?? "").slice(0, 8000).trim();
@@ -208,6 +262,11 @@ export async function runAgentTool({ name, input, agent, wandUserId }: RunToolAr
       return { error: `Default board for ${agent} (slug=${slug}) not found.` };
     }
 
+    const listingId =
+      typeof input?.listingId === "number" && input.listingId > 0
+        ? input.listingId
+        : undefined;
+
     const [res] = await db.insert(tasks).values({
       title,
       description,
@@ -219,10 +278,12 @@ export async function runAgentTool({ name, input, agent, wandUserId }: RunToolAr
       boardId: board.id,
       visibility: "board" as any,
       ownerAgent: agent,
+      listingId,
     });
     return {
       taskId: res.insertId,
       board: { id: board.id, slug: board.slug, name: board.name },
+      listingId: listingId ?? null,
       url: `/task/${res.insertId}`,
     };
   }

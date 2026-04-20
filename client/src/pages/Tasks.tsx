@@ -774,6 +774,18 @@ function TaskDetailSheet({
     onError: (err: { message: string }) => toast.error(err.message),
   });
 
+  // Property (listing) editor — lets users fix tasks the agent didn't
+  // auto-resolve, and unblocks Push to Breezeway.
+  const { data: allListings = [] } = trpc.listings.list.useQuery();
+  const updateListingMut = trpc.tasks.updateListing.useMutation({
+    onSuccess: () => {
+      utils.tasks.list.invalidate();
+      utils.tasks.detail.invalidate({ taskId: task?.id ?? 0 });
+      toast.success("Property updated");
+    },
+    onError: (err: { message: string }) => toast.error(err.message),
+  });
+
   // Push-to-Breezeway for Wand-originated tasks (no breezewayTaskId yet)
   const pushToBreezewayMut = trpc.tasks.pushToBreezeway.useMutation({
     onSuccess: (data) => {
@@ -946,40 +958,75 @@ function TaskDetailSheet({
                   </div>
                 )}
 
-                {/* Board indicator + Move action (Phase 2) */}
+                {/* Board + Property selectors (Phase 2) */}
                 {boardsList.length > 0 && (
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-muted-foreground">Board:</span>
-                    <Select
-                      value={
-                        (task as any).boardId
-                          ? String((task as any).boardId)
-                          : "none"
-                      }
-                      onValueChange={(v) => {
-                        if (v === "none" || !task) return;
-                        moveTaskMut.mutate({
-                          taskId: task.id,
-                          boardId: Number(v),
-                          visibility: "board",
-                        });
-                      }}
-                    >
-                      <SelectTrigger className="h-7 text-xs w-[160px]">
-                        <SelectValue placeholder="No board" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {boardsList.map((b: any) => (
-                          <SelectItem
-                            key={b.id}
-                            value={String(b.id)}
-                            className="text-xs"
-                          >
-                            {b.name}
+                  <div className="flex items-center gap-3 text-xs flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">Board:</span>
+                      <Select
+                        value={
+                          (task as any).boardId
+                            ? String((task as any).boardId)
+                            : "none"
+                        }
+                        onValueChange={(v) => {
+                          if (v === "none" || !task) return;
+                          moveTaskMut.mutate({
+                            taskId: task.id,
+                            boardId: Number(v),
+                            visibility: "board",
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-[140px]">
+                          <SelectValue placeholder="No board" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {boardsList.map((b: any) => (
+                            <SelectItem
+                              key={b.id}
+                              value={String(b.id)}
+                              className="text-xs"
+                            >
+                              {b.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">Property:</span>
+                      <Select
+                        value={
+                          task?.listingId ? String(task.listingId) : "none"
+                        }
+                        onValueChange={(v) => {
+                          if (!task) return;
+                          updateListingMut.mutate({
+                            taskId: task.id,
+                            listingId: v === "none" ? null : Number(v),
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-[220px]">
+                          <SelectValue placeholder="No property" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-[320px]">
+                          <SelectItem value="none" className="text-xs">
+                            (no property)
                           </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                          {allListings.map((l: any) => (
+                            <SelectItem
+                              key={l.id}
+                              value={String(l.id)}
+                              className="text-xs"
+                            >
+                              {l.internalName || l.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 )}
 

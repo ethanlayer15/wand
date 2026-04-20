@@ -553,6 +553,26 @@ export const appRouter = router({
         return updateTaskTitle(input.taskId, input.title.trim());
       }),
 
+    // Set / change the property (listing) a task is associated with.
+    // Used by the task detail sheet so users can fix tasks the agent
+    // failed to auto-resolve, and so Push to Breezeway can find the
+    // right BW property afterward.
+    updateListing: protectedProcedure
+      .input(z.object({
+        taskId: z.number(),
+        listingId: z.number().nullable(),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { tasks } = await import("../drizzle/schema");
+        await db
+          .update(tasks)
+          .set({ listingId: input.listingId ?? null })
+          .where(eq(tasks.id, input.taskId));
+        return { ok: true };
+      }),
+
     // ── Attachments (photos/videos) ──────────────────────────────────
     uploadAttachment: protectedProcedure
       .input(z.object({
