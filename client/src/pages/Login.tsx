@@ -49,7 +49,7 @@ function WandIcon({ className }: { className?: string }) {
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
-  domain_restricted: "Only @leisrstays.com Google accounts can sign in to Wand.",
+  domain_restricted: "Only @leisrstays.com or @5strclean.com Google accounts can sign in to Wand.",
   not_invited: "You don't have an invitation yet. Ask your admin to invite you.",
   google_auth_denied: "Google sign-in was cancelled. Please try again.",
   google_auth_failed: "Google sign-in failed. Please try again.",
@@ -101,7 +101,7 @@ export default function Login() {
           <CardHeader className="text-center pb-4">
             <CardTitle className="text-lg">Welcome back</CardTitle>
             <CardDescription>
-              Sign in with your LeisrStays Google account
+              Sign in with your LeisrStays or 5STR Google account
             </CardDescription>
           </CardHeader>
           <CardContent className="pb-6">
@@ -116,7 +116,8 @@ export default function Login() {
             </Button>
 
             <p className="text-xs text-muted-foreground text-center mt-4">
-              Only <span className="font-medium">@leisrstays.com</span> accounts are allowed.
+              Only <span className="font-medium">@leisrstays.com</span> or{" "}
+              <span className="font-medium">@5strclean.com</span> accounts are allowed.
               <br />
               Contact your admin if you need an invitation.
             </p>

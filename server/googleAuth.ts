@@ -5,7 +5,8 @@
  * 1. GET /api/auth/google — redirects to Google consent screen
  * 2. GET /api/auth/callback/google — handles callback, creates session
  *
- * Only @leisrstays.com accounts with a valid team invitation (or existing user) can sign in.
+ * Only @leisrstays.com or @5strclean.com accounts with a valid team invitation
+ * (or existing user) can sign in.
  */
 import { OAuth2Client } from "google-auth-library";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
@@ -16,7 +17,8 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { sdk } from "./_core/sdk";
 import { ENV } from "./_core/env";
 
-const ALLOWED_DOMAIN = "leisrstays.com";
+const ALLOWED_DOMAINS = ["leisrstays.com", "5strclean.com"] as const;
+const ALLOWED_DOMAINS_DISPLAY = ALLOWED_DOMAINS.map((d) => `@${d}`).join(" or ");
 const SCOPES = ["openid", "email", "profile"];
 
 function getOAuth2Client(redirectUri: string) {
@@ -46,7 +48,8 @@ export function registerGoogleAuthRoutes(app: Express) {
       access_type: "offline",
       scope: SCOPES,
       state,
-      hd: ALLOWED_DOMAIN, // Restrict to GSuite domain
+      // `hd` only accepts a single domain. With two allowed domains we omit it
+      // and rely on the server-side `endsWith` check below to enforce the rule.
       prompt: "select_account",
     });
 
@@ -102,8 +105,13 @@ export function registerGoogleAuthRoutes(app: Express) {
       const { email, name, picture, sub: googleId, hd } = payload;
 
       // Server-side domain enforcement
-      if (!email || !email.endsWith(`@${ALLOWED_DOMAIN}`)) {
-        console.warn(`[GoogleAuth] Rejected non-${ALLOWED_DOMAIN} email: ${email}`);
+      const emailDomainOk =
+        !!email &&
+        ALLOWED_DOMAINS.some((d) => email.toLowerCase().endsWith(`@${d}`));
+      if (!emailDomainOk) {
+        console.warn(
+          `[GoogleAuth] Rejected email outside ${ALLOWED_DOMAINS_DISPLAY}: ${email}`
+        );
         res.redirect(`${origin}/login?error=domain_restricted`);
         return;
       }
