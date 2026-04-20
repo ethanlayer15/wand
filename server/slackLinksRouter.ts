@@ -182,7 +182,16 @@ export const slackLinksRouter = router({
       let alreadyLinked = 0;
       let skippedNoEmail = 0;
       let skippedNoSlack = 0;
+      let failed = 0;
       const matchedEmails: string[] = [];
+      const errors: Array<{ email: string; error: string }> = [];
+
+      // Track slack ids already linked this run so two Wand users sharing
+      // an email don't both try to claim the same Slack account.
+      const claimedSlackIds = new Set<string>();
+      for (const l of existingLinks) {
+        claimedSlackIds.add(`${l.workspaceId}:${l.slackUserId}`);
+      }
 
       for (const u of wandUsers) {
         const email = u.email?.toLowerCase();
@@ -200,19 +209,56 @@ export const slackLinksRouter = router({
           alreadyLinked++;
           continue;
         }
-        // Replace or insert
-        if (existing) {
+
+        const key = `${slack.teamId}:${slack.slackUserId}`;
+        if (claimedSlackIds.has(key) && !existing) {
+          failed++;
+          errors.push({
+            email,
+            error: `Slack user ${slack.slackUserId} already linked to a different Wand user (possibly duplicate emails in users table)`,
+          });
+          continue;
+        }
+
+        try {
+          if (existing) {
+            await db
+              .delete(slackUserLinks)
+              .where(eq(slackUserLinks.id, existing.id));
+          }
+          // Preemptively clear any stale link for the same slack user so the
+          // UNIQUE (workspaceId, slackUserId) constraint can't trip.
           await db
             .delete(slackUserLinks)
-            .where(eq(slackUserLinks.id, existing.id));
+            .where(
+              and(
+                eq(slackUserLinks.workspaceId, slack.teamId),
+                eq(slackUserLinks.slackUserId, slack.slackUserId)
+              )
+            );
+          await db.insert(slackUserLinks).values({
+            userId: u.id,
+            workspaceId: slack.teamId,
+            slackUserId: slack.slackUserId,
+          });
+          claimedSlackIds.add(key);
+          matched++;
+          matchedEmails.push(email);
+        } catch (err: any) {
+          // Surface the actual MySQL reason rather than drizzle's
+          // generic "Failed query" wrapper.
+          const reason =
+            err?.sqlMessage ||
+            err?.cause?.sqlMessage ||
+            err?.message ||
+            "unknown error";
+          console.error(
+            `[slackLinks.autoMatch] insert failed for ${email} (userId=${u.id}, slackUserId=${slack.slackUserId}):`,
+            reason
+          );
+          failed++;
+          errors.push({ email, error: reason });
         }
-        await db.insert(slackUserLinks).values({
-          userId: u.id,
-          workspaceId: slack.teamId,
-          slackUserId: slack.slackUserId,
-        });
-        matched++;
-        matchedEmails.push(email);
       }
 
       return {
@@ -220,9 +266,11 @@ export const slackLinksRouter = router({
         alreadyLinked,
         skippedNoEmail,
         skippedNoSlack,
+        failed,
         totalWandUsers: wandUsers.length,
         totalSlackUsers: slackUsers.length,
         matchedEmails,
+        errors,
       };
     }),
 });
