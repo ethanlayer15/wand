@@ -1504,11 +1504,17 @@ export const appRouter = router({
       .mutation(async ({ input, ctx }) => {
         const email = input.email.toLowerCase().trim();
 
-        // Validate domain
-        if (!email.endsWith("@leisrstays.com")) {
+        // Validate domain — must match one of the allowed Google-auth domains.
+        // Keep this list in sync with ALLOWED_DOMAINS in server/googleAuth.ts.
+        const INVITE_ALLOWED_DOMAINS = ["leisrstays.com", "5strclean.com"];
+        const domainOk = INVITE_ALLOWED_DOMAINS.some((d) =>
+          email.endsWith(`@${d}`)
+        );
+        if (!domainOk) {
+          const display = INVITE_ALLOWED_DOMAINS.map((d) => `@${d}`).join(" or ");
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "Only @leisrstays.com email addresses can be invited",
+            message: `Only ${display} email addresses can be invited`,
           });
         }
 
