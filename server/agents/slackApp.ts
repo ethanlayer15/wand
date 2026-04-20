@@ -217,7 +217,19 @@ function makeAgentHandler(agentName: AgentName) {
             );
             return;
           }
-          const prompt = `A team member reacted with :${event.reaction}: to a Slack message — propose a task for it. Use the createTaskDraft tool. Pass the original message verbatim as context, set a short imperative title (≤80 chars), pick the most appropriate priority/category, and assign it to your default board. After the tool call, post a short one-line confirmation in the thread linking to the new task.\n\nOriginal message author: <@${original.user ?? "unknown"}>\nMessage text:\n"""\n${original.text}\n"""`;
+          const prompt = `A team member reacted with :${event.reaction}: to a Slack message — propose a task for it.
+
+Process:
+1. Read the message text below.
+2. If it mentions a property (even loosely — "Skylar", "the bunk room at Quo", "Kimble"), call findListing FIRST with that name fragment. Use the matched listing id when you create the task. If no clear match, omit listingId.
+3. Then call createTaskDraft with: a short imperative title (≤80 chars), the original message as context in the description, an honest priority/category, and the listingId if you found one.
+4. Reply with a single short line confirming the task title.
+
+Original message author: <@${original.user ?? "unknown"}>
+Message text:
+"""
+${original.text}
+"""`;
           const result = await runAgent({
             agent: agentName,
             userMessage: prompt,
