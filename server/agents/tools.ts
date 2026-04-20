@@ -11,7 +11,16 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { and, desc, eq, lte, gte, or } from "drizzle-orm";
 import { getDb } from "../db";
-import { onCallSchedule, tasks, users } from "../../drizzle/schema";
+import { boards, onCallSchedule, tasks, users } from "../../drizzle/schema";
+
+/**
+ * Default board slug each agent owns. The reaction-to-task flow uses this
+ * unless the user explicitly moves the resulting task elsewhere afterward.
+ */
+const AGENT_DEFAULT_BOARD: Record<"wanda" | "starry", string> = {
+  wanda: "leisr_ops",
+  starry: "fivestr_ops",
+};
 
 export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
   {
@@ -52,6 +61,38 @@ export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
       },
     },
   },
+  {
+    name: "createTaskDraft",
+    description:
+      "Create a new Wand task on this agent's default board (Wanda → Leisr Ops, Starry → 5STR Ops). Use this when reacting to a Slack message or when the user explicitly asks for a task to be created. Always include a clear short imperative title, a useful description (with the original Slack quote when applicable), and an honest priority/category.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description:
+            "Short imperative task title (≤80 chars). Example: 'Replace torn carpet in master bedroom at Skyland'.",
+        },
+        description: {
+          type: "string",
+          description:
+            "Full context for the task. Include the original quoted message and any relevant Slack/property details.",
+        },
+        priority: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+          description:
+            "Task priority. Default to 'medium' unless there's a clear signal of urgency or it's truly trivial.",
+        },
+        category: {
+          type: "string",
+          enum: ["maintenance", "cleaning", "improvements"],
+          description: "Category of task. Default to 'maintenance' if uncertain.",
+        },
+      },
+      required: ["title", "description"],
+    },
+  },
 ];
 
 interface RunToolArgs {
@@ -61,7 +102,7 @@ interface RunToolArgs {
   wandUserId?: number;
 }
 
-export async function runAgentTool({ name, input, wandUserId }: RunToolArgs) {
+export async function runAgentTool({ name, input, agent, wandUserId }: RunToolArgs) {
   const db = await getDb();
   if (!db) return { error: "Database unavailable" };
 
@@ -139,6 +180,50 @@ export async function runAgentTool({ name, input, wandUserId }: RunToolArgs) {
           boardId: t.boardId,
           dueDate: t.dueDate,
         })),
+    };
+  }
+
+  if (name === "createTaskDraft") {
+    const title = String(input?.title ?? "").slice(0, 200).trim();
+    const description = String(input?.description ?? "").slice(0, 8000).trim();
+    if (!title) return { error: "title is required" };
+
+    const priority = (["low", "medium", "high"] as const).includes(input?.priority)
+      ? input.priority
+      : "medium";
+    const category = (["maintenance", "cleaning", "improvements"] as const).includes(
+      input?.category
+    )
+      ? input.category
+      : "maintenance";
+
+    // Resolve agent's default board id by slug
+    const slug = AGENT_DEFAULT_BOARD[agent];
+    const [board] = await db
+      .select()
+      .from(boards)
+      .where(eq(boards.slug, slug))
+      .limit(1);
+    if (!board) {
+      return { error: `Default board for ${agent} (slug=${slug}) not found.` };
+    }
+
+    const [res] = await db.insert(tasks).values({
+      title,
+      description,
+      priority,
+      status: "created",
+      category,
+      taskType: category === "cleaning" ? "housekeeping" : "maintenance",
+      source: "wand_manual" as any,
+      boardId: board.id,
+      visibility: "board" as any,
+      ownerAgent: agent,
+    });
+    return {
+      taskId: res.insertId,
+      board: { id: board.id, slug: board.slug, name: board.name },
+      url: `/task/${res.insertId}`,
     };
   }
 

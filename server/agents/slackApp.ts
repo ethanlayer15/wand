@@ -93,6 +93,56 @@ async function postSlackMessage(
   return json;
 }
 
+/**
+ * Fetch a single message by channel + ts. Used by the reaction-to-task flow
+ * to read the message that the user reacted to.
+ */
+async function fetchSlackMessage(
+  botToken: string,
+  channel: string,
+  ts: string
+): Promise<{ user?: string; text?: string; ts: string } | null> {
+  // conversations.history with latest=ts, inclusive=true, limit=1
+  const params = new URLSearchParams({
+    channel,
+    latest: ts,
+    inclusive: "true",
+    limit: "1",
+  });
+  const res = await fetch(`${SLACK_API}/conversations.history?${params}`, {
+    headers: { Authorization: `Bearer ${botToken}` },
+  });
+  const json = (await res.json()) as {
+    ok: boolean;
+    error?: string;
+    messages?: Array<{ user?: string; text?: string; ts: string }>;
+  };
+  if (!json.ok) {
+    // Fallback for thread replies which conversations.history won't return
+    const repParams = new URLSearchParams({ channel, ts });
+    const rep = await fetch(
+      `${SLACK_API}/conversations.replies?${repParams}`,
+      { headers: { Authorization: `Bearer ${botToken}` } }
+    );
+    const repJson = (await rep.json()) as {
+      ok: boolean;
+      messages?: Array<{ user?: string; text?: string; ts: string }>;
+    };
+    if (!repJson.ok || !repJson.messages?.length) {
+      console.error(`[slack] fetchMessage failed: ${json.error}`);
+      return null;
+    }
+    return repJson.messages[0];
+  }
+  return json.messages?.[0] ?? null;
+}
+
+/**
+ * Reactions that trigger the propose-a-task flow. We accept several so users
+ * can configure their workspace's :wand: emoji or use a stock alternative.
+ */
+const TASK_REACTIONS = new Set(["wand", "memo", "white_check_mark", "ballot_box_with_check"]);
+
 function makeAgentHandler(agentName: AgentName) {
   return async (req: express.Request, res: express.Response) => {
     const agent = AGENTS[agentName];
@@ -136,17 +186,70 @@ function makeAgentHandler(agentName: AgentName) {
 
       // Ignore the bot's own messages and bot-to-bot loops
       if (event.bot_id || event.subtype === "bot_message") return;
-      // Only handle DMs (im) and explicit @-mentions for Phase 1
+
       const isDm = event.channel_type === "im" && event.type === "message";
       const isMention = event.type === "app_mention";
-      if (!isDm && !isMention) return;
+      const isReaction =
+        event.type === "reaction_added" && TASK_REACTIONS.has(event.reaction);
 
+      if (!isDm && !isMention && !isReaction) return;
+
+      const slackUser: string = event.user;
+      const wandUserId = await resolveWandUserFromSlack(teamId, slackUser);
+
+      // ── Reaction-to-task flow ────────────────────────────────────────
+      if (isReaction) {
+        try {
+          const channel: string = event.item?.channel;
+          const itemTs: string = event.item?.ts;
+          if (!channel || !itemTs) return;
+          const original = await fetchSlackMessage(
+            agent.slackBotToken,
+            channel,
+            itemTs
+          );
+          if (!original?.text) {
+            await postSlackMessage(
+              agent.slackBotToken,
+              channel,
+              `:warning: ${agent.displayName} couldn't read the reacted message (probably needs to be added to this channel).`,
+              itemTs
+            );
+            return;
+          }
+          const prompt = `A team member reacted with :${event.reaction}: to a Slack message — propose a task for it. Use the createTaskDraft tool. Pass the original message verbatim as context, set a short imperative title (≤80 chars), pick the most appropriate priority/category, and assign it to your default board. After the tool call, post a short one-line confirmation in the thread linking to the new task.\n\nOriginal message author: <@${original.user ?? "unknown"}>\nMessage text:\n"""\n${original.text}\n"""`;
+          const result = await runAgent({
+            agent: agentName,
+            userMessage: prompt,
+            triggeredBy: "slack",
+            slack: { channelId: channel, threadTs: itemTs, userId: slackUser, teamId },
+            wandUserId,
+          });
+          if (result.reply) {
+            await postSlackMessage(
+              agent.slackBotToken,
+              channel,
+              result.reply,
+              itemTs
+            );
+          } else if (result.error) {
+            await postSlackMessage(
+              agent.slackBotToken,
+              channel,
+              `:warning: ${agent.displayName} hit an error: ${result.error}`,
+              itemTs
+            );
+          }
+        } catch (err: any) {
+          console.error(`[slack:${agentName}] reaction handler error:`, err.message);
+        }
+        return;
+      }
+
+      // ── DM / @-mention flow ──────────────────────────────────────────
       const text: string = event.text ?? "";
       const channel: string = event.channel;
-      const slackUser: string = event.user;
       const threadTs: string | undefined = event.thread_ts ?? event.ts;
-
-      const wandUserId = await resolveWandUserFromSlack(teamId, slackUser);
 
       try {
         const result = await runAgent({
