@@ -334,6 +334,11 @@ export async function getTasks() {
       resolvedAt: tasks.resolvedAt,
       resolutionMessageId: tasks.resolutionMessageId,
       monitoringExpiresAt: tasks.monitoringExpiresAt,
+      // Phase 1 board / visibility columns
+      boardId: tasks.boardId,
+      visibility: tasks.visibility,
+      ownerUserId: tasks.ownerUserId,
+      ownerAgent: tasks.ownerAgent,
     })
     .from(tasks)
     .leftJoin(listings, eq(tasks.listingId, listings.id))

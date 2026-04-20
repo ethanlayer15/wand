@@ -763,6 +763,17 @@ function TaskDetailSheet({
     setTitleDraft("");
   };
 
+  // Board switcher for this task — Phase 2
+  const { data: boardsList = [] } = trpc.boards.list.useQuery();
+  const moveTaskMut = trpc.boards.moveTask.useMutation({
+    onSuccess: () => {
+      utils.tasks.list.invalidate();
+      utils.tasks.detail.invalidate({ taskId: task?.id ?? 0 });
+      toast.success("Task moved");
+    },
+    onError: (err: { message: string }) => toast.error(err.message),
+  });
+
   // Push-to-Breezeway for Wand-originated tasks (no breezewayTaskId yet)
   const pushToBreezewayMut = trpc.tasks.pushToBreezeway.useMutation({
     onSuccess: (data) => {
@@ -932,6 +943,43 @@ function TaskDetailSheet({
                       {task.title}
                     </h3>
                     <PenSquare className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-60 transition-opacity mt-0.5 shrink-0" />
+                  </div>
+                )}
+
+                {/* Board indicator + Move action (Phase 2) */}
+                {boardsList.length > 0 && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">Board:</span>
+                    <Select
+                      value={
+                        (task as any).boardId
+                          ? String((task as any).boardId)
+                          : "none"
+                      }
+                      onValueChange={(v) => {
+                        if (v === "none" || !task) return;
+                        moveTaskMut.mutate({
+                          taskId: task.id,
+                          boardId: Number(v),
+                          visibility: "board",
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-[160px]">
+                        <SelectValue placeholder="No board" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {boardsList.map((b: any) => (
+                          <SelectItem
+                            key={b.id}
+                            value={String(b.id)}
+                            className="text-xs"
+                          >
+                            {b.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 )}
 
@@ -2228,8 +2276,28 @@ export default function Tasks() {
   const [podFilterOpen, setPodFilterOpen] = useState(false);
   const [showMyTasks, setShowMyTasks] = useState(false);
 
+  // Board filter — top-level switch between department kanbans (Phase 2).
+  // `null` means "All Boards"; a number is the board id.
+  // Persists in localStorage so the default sticks across sessions.
+  const [boardFilter, setBoardFilter] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const v = window.localStorage.getItem("wand.boardFilter");
+    if (v === null) return null;
+    if (v === "all") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  });
+  const setBoardFilterPersisted = (v: number | null) => {
+    setBoardFilter(v);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("wand.boardFilter", v === null ? "all" : String(v));
+    }
+  };
+
   // Pods data for filtering
   const { data: podsData = [] } = trpc.pods.list.useQuery();
+  // Boards data for filtering + the board switcher tab strip
+  const { data: boardsData = [] } = trpc.boards.list.useQuery();
 
   // Detail sheet state
   const [detailTask, setDetailTask] = useState<TaskType | null>(null);
@@ -2506,17 +2574,23 @@ export default function Tasks() {
     ? archiveTasksByTab[archiveTab] || []
     : activeTasks;
 
+  // Apply board filter (top-level — Phase 2 department kanbans)
+  const boardFiltered =
+    boardFilter === null
+      ? displayTasks
+      : displayTasks.filter((t) => (t as any).boardId === boardFilter);
+
   // Apply source filter
   const sourceFiltered =
     sourceFilter === "all"
-      ? displayTasks
+      ? boardFiltered
       : sourceFilter === "guest_message"
-        ? displayTasks.filter((t) => t.source === "guest_message")
+        ? boardFiltered.filter((t) => t.source === "guest_message")
         : sourceFilter === "review"
-          ? displayTasks.filter((t) => t.source === "review" || t.source === "airbnb_review")
+          ? boardFiltered.filter((t) => t.source === "review" || t.source === "airbnb_review")
           : sourceFilter === "wand_manual"
-            ? displayTasks.filter((t) => t.source === "wand_manual" || t.source === "manual")
-            : displayTasks.filter((t) => t.source === sourceFilter);
+            ? boardFiltered.filter((t) => t.source === "wand_manual" || t.source === "manual")
+            : boardFiltered.filter((t) => t.source === sourceFilter);
 
   // Apply pod filter (multi-select)
   // Build a set of listing IDs that belong to ANY of the selected pods
@@ -2805,6 +2879,46 @@ export default function Tasks() {
             )}
           </div>
         </div>
+
+        {/* Board switcher (Phase 2 — department kanbans) */}
+        {boardsData.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setBoardFilterPersisted(null)}
+              className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                boardFilter === null
+                  ? "bg-foreground text-background border-foreground"
+                  : "bg-background hover:bg-accent border-input text-muted-foreground"
+              }`}
+            >
+              All Boards
+              <span className="ml-1.5 opacity-60">{activeTasks.length}</span>
+            </button>
+            {boardsData.map((b: any) => {
+              const count = activeTasks.filter(
+                (t: any) => t.boardId === b.id
+              ).length;
+              const selected = boardFilter === b.id;
+              return (
+                <button
+                  type="button"
+                  key={b.id}
+                  onClick={() => setBoardFilterPersisted(b.id)}
+                  className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                    selected
+                      ? "bg-foreground text-background border-foreground"
+                      : "bg-background hover:bg-accent border-input text-muted-foreground"
+                  }`}
+                  title={`${b.name} — ${b.agent === "wanda" ? "Wanda" : "Starry"}`}
+                >
+                  {b.name}
+                  <span className="ml-1.5 opacity-60">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Filter bar */}
         <div className="flex items-center gap-3 flex-wrap">

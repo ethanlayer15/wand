@@ -1,6 +1,17 @@
 import mysql from "mysql2/promise";
 import fs from "node:fs";
 
+/**
+ * Apply Phase 1 migration to the Wand DB.
+ *
+ * Strategy: run each DDL/DML block individually, skipping "already exists"
+ * errors so the script is safely re-runnable. We split the file into well-
+ * defined blocks separated by ";\n\n" (blank line after a semicolon) — that
+ * matches how the migration is written and avoids the prior bug where
+ * comments + CREATE TABLE got merged into one statement that TiDB never
+ * actually executed.
+ */
+
 const url = new URL(process.env.DATABASE_URL);
 const conn = await mysql.createConnection({
   host: url.hostname,
@@ -9,50 +20,65 @@ const conn = await mysql.createConnection({
   password: url.password,
   database: url.pathname.slice(1),
   ssl: { rejectUnauthorized: false },
-  multipleStatements: true,
+  multipleStatements: false, // run one statement per call so errors are precise
 });
 
-const sql = fs
-  .readFileSync(
-    new URL("../drizzle/migrations/0004_agents_phase1.sql", import.meta.url),
-    "utf8"
-  )
-  .replace(/-->\s*statement-breakpoint/g, "");
+const raw = fs.readFileSync(
+  new URL("../drizzle/migrations/0004_agents_phase1.sql", import.meta.url),
+  "utf8"
+);
 
-// Split on `;` followed by newline so we can skip-on-already-exists per statement.
-const statements = sql
-  .split(/;\s*\n/)
+// Strip line comments so they can't get glued to the next statement.
+const stripped = raw
+  .split("\n")
+  .map((line) => (line.trimStart().startsWith("--") ? "" : line))
+  .join("\n");
+
+// Split on ";" at end of line. Each block is one statement.
+const statements = stripped
+  .split(/;[ \t]*\n/)
   .map((s) => s.trim())
-  .filter((s) => s.length > 0 && !s.startsWith("--"));
+  .filter((s) => s.length > 0);
+
+console.log(`Parsed ${statements.length} statements.\n`);
+
+const SKIP_CODES = new Set([
+  "ER_DUP_FIELDNAME",
+  "ER_TABLE_EXISTS_ERROR",
+  "ER_DUP_KEYNAME",
+  "ER_DUP_ENTRY",
+]);
 
 let applied = 0;
 let skipped = 0;
-for (const stmt of statements) {
+for (let i = 0; i < statements.length; i++) {
+  const stmt = statements[i];
+  const preview = stmt.slice(0, 80).replace(/\s+/g, " ");
   try {
     await conn.query(stmt);
     applied++;
+    console.log(`  ✓ [${i + 1}/${statements.length}] ${preview}…`);
   } catch (err) {
-    if (
-      err.code === "ER_DUP_FIELDNAME" ||
-      err.code === "ER_TABLE_EXISTS_ERROR" ||
-      err.code === "ER_DUP_KEYNAME" ||
-      err.code === "ER_DUP_ENTRY"
-    ) {
+    if (SKIP_CODES.has(err.code)) {
       skipped++;
-      console.log(`  ⏭  ${err.code}: ${err.sqlMessage}`);
+      console.log(`  ⏭  [${i + 1}/${statements.length}] ${err.code}: ${err.sqlMessage}`);
     } else {
-      console.error("Statement that failed:\n", stmt);
+      console.error(`\n❌ [${i + 1}/${statements.length}] Statement failed:`);
+      console.error(stmt);
+      console.error("\nError:", err.code, err.sqlMessage);
       throw err;
     }
   }
 }
 
-console.log(`\n✅ Applied ${applied} statements, skipped ${skipped}.`);
+console.log(`\n✅ Applied ${applied}, skipped ${skipped}.\n`);
 
 const [boards] = await conn.query(`SELECT id, slug, name, agent FROM boards`);
-console.log("\nboards:");
+console.log("boards:");
 for (const b of boards) {
-  console.log(`  ${String(b.id).padEnd(3)} ${b.slug.padEnd(14)} ${b.name.padEnd(14)} (agent: ${b.agent})`);
+  console.log(
+    `  ${String(b.id).padEnd(3)} ${b.slug.padEnd(14)} ${b.name.padEnd(14)} (agent: ${b.agent})`
+  );
 }
 
 const [taskCols] = await conn.query(

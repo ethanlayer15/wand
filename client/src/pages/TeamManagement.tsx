@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
-import { Users, UserPlus, Mail, Shield, Trash2, MoreVertical } from "lucide-react";
+import { Users, UserPlus, Mail, Shield, Trash2, MoreVertical, Slack as SlackIcon, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -235,6 +235,9 @@ export default function TeamManagement() {
         </CardContent>
       </Card>
 
+      {/* Slack User Linking (Phase 2) */}
+      <SlackLinkingCard members={members} isAdmin={isAdmin} />
+
       {/* Pending Invitations */}
       {invitations.length > 0 && (
         <Card>
@@ -280,6 +283,205 @@ export default function TeamManagement() {
           </CardContent>
         </Card>
       )}
+    </div>
+  );
+}
+
+// ── Slack User Linking ────────────────────────────────────────────────
+
+function SlackLinkingCard({
+  members,
+  isAdmin,
+}: {
+  members: any[];
+  isAdmin: boolean;
+}) {
+  const linksQuery = trpc.slackLinks.list.useQuery();
+  const autoMatchMut = trpc.slackLinks.autoMatch.useMutation({
+    onSuccess: (data) => {
+      toast.success(
+        `Auto-match: ${data.matched} matched, ${data.alreadyLinked} already linked, ${data.skippedNoSlack} no Slack account, ${data.skippedNoEmail} no email`
+      );
+      linksQuery.refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const upsertMut = trpc.slackLinks.upsert.useMutation({
+    onSuccess: () => {
+      toast.success("Link saved");
+      linksQuery.refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const deleteMut = trpc.slackLinks.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Link removed");
+      linksQuery.refetch();
+    },
+  });
+
+  const links = linksQuery.data ?? [];
+  const linkedUserIds = new Set(links.map((l: any) => l.userId));
+  const unlinkedMembers = members.filter((m) => !linkedUserIds.has(m.id));
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <SlackIcon className="w-5 h-5" />
+            Slack User Linking
+          </CardTitle>
+          <CardDescription>
+            Connects each Wand user to their Slack account so Wanda + Starry can
+            identify them in DMs and surface their tasks.
+          </CardDescription>
+        </div>
+        {isAdmin && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => autoMatchMut.mutate({ force: false })}
+            disabled={autoMatchMut.isPending}
+          >
+            <RefreshCw
+              className={`w-4 h-4 mr-2 ${autoMatchMut.isPending ? "animate-spin" : ""}`}
+            />
+            Auto-match by email
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {links.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No Slack links yet. Click <em>Auto-match by email</em> to connect
+            everyone whose Slack email matches their Wand email.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Wand User</TableHead>
+                <TableHead>Slack User ID</TableHead>
+                <TableHead>Workspace</TableHead>
+                {isAdmin && <TableHead className="w-12" />}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {links.map((l: any) => (
+                <TableRow key={l.id}>
+                  <TableCell>
+                    <div className="font-medium">{l.userName || "—"}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {l.userEmail}
+                    </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {l.slackUserId}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {l.workspaceId}
+                  </TableCell>
+                  {isAdmin && (
+                    <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          if (confirm("Remove this Slack link?"))
+                            deleteMut.mutate({ id: l.id });
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+
+        {isAdmin && unlinkedMembers.length > 0 && (
+          <ManualLinkRow members={unlinkedMembers} onSubmit={upsertMut.mutate} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ManualLinkRow({
+  members,
+  onSubmit,
+}: {
+  members: any[];
+  onSubmit: (input: {
+    userId: number;
+    workspaceId: string;
+    slackUserId: string;
+  }) => void;
+}) {
+  const [userId, setUserId] = useState<string>("");
+  const [workspaceId, setWorkspaceId] = useState<string>("");
+  const [slackUserId, setSlackUserId] = useState<string>("");
+
+  const submit = () => {
+    if (!userId || !workspaceId || !slackUserId) {
+      toast.error("All three fields required");
+      return;
+    }
+    onSubmit({
+      userId: Number(userId),
+      workspaceId: workspaceId.trim(),
+      slackUserId: slackUserId.trim(),
+    });
+    setUserId("");
+    setSlackUserId("");
+  };
+
+  return (
+    <div className="border-t pt-4">
+      <p className="text-xs text-muted-foreground mb-2">
+        Or link manually (e.g. for someone whose Slack email differs):
+      </p>
+      <div className="flex gap-2 items-end flex-wrap">
+        <div className="flex-1 min-w-[180px]">
+          <Label className="text-xs">Wand user</Label>
+          <Select value={userId} onValueChange={setUserId}>
+            <SelectTrigger className="h-9">
+              <SelectValue placeholder="Pick a member" />
+            </SelectTrigger>
+            <SelectContent>
+              {members.map((m: any) => (
+                <SelectItem key={m.id} value={String(m.id)}>
+                  {m.name || m.email || `user #${m.id}`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex-1 min-w-[140px]">
+          <Label className="text-xs">Workspace ID</Label>
+          <Input
+            placeholder="T01ABC2DE3"
+            value={workspaceId}
+            onChange={(e) => setWorkspaceId(e.target.value)}
+            className="h-9"
+          />
+        </div>
+        <div className="flex-1 min-w-[140px]">
+          <Label className="text-xs">Slack User ID</Label>
+          <Input
+            placeholder="U01ABC2DE3"
+            value={slackUserId}
+            onChange={(e) => setSlackUserId(e.target.value)}
+            className="h-9"
+          />
+        </div>
+        <Button onClick={submit} size="sm">
+          Link
+        </Button>
+      </div>
     </div>
   );
 }
