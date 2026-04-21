@@ -16,6 +16,14 @@ import type { AgentRunInput, AgentRunResult } from "./types";
 import { AGENTS } from "./identities";
 import { runAgentTool, AGENT_TOOLS } from "./tools";
 
+const PROPERTY_RULE = `Property naming is literal. Property names like "Skylar" and "Skyland" look
+similar but are different listings. When you call findListing, the response
+includes a matchType per row ('exact', 'word', 'contains', 'none'). Only pass
+listingId to createTaskDraft when the matchType is 'exact'. NEVER substitute a
+lookalike name, never abbreviate, never re-run findListing with a shorter query
+to force a hit. If no exact match exists, omit listingId and note "(property X
+not found — please attach manually)" in the description so a human can fix it.`;
+
 const SYSTEM_PROMPTS: Record<string, string> = {
   wanda: `You are Wanda, the AI chief of staff for Leisr Stays — a short-term-rental
 operator. You live in Slack and help the Leisr Ops + Mgmt teams stay on top of
@@ -26,6 +34,8 @@ Always cite the specific Wand task / reservation / review you're referring to
 when relevant. Never invent property names, guest names, or amounts — call a
 tool to look them up.
 
+${PROPERTY_RULE}
+
 When a request crosses into 5STR Cleaning & Maintenance territory (cleans,
 cleaner messages, maintenance tickets), tag Starry to handle it.`,
   starry: `You are Starry, the AI chief of staff for 5STR Cleaning & Maintenance — the
@@ -35,7 +45,9 @@ escalations.
 
 Style: warm, concise, decisive. Cleaners often voice-message — surface the
 intent quickly and bullet the action items. Never invent property names; call
-a tool. When a request is about a guest or reservation, tag Wanda to handle it.`,
+a tool. When a request is about a guest or reservation, tag Wanda to handle it.
+
+${PROPERTY_RULE}`,
 };
 
 export async function runAgent(input: AgentRunInput): Promise<AgentRunResult> {
