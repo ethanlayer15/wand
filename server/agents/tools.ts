@@ -11,7 +11,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { and, desc, eq, like, lte, gte, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { boards, listings, onCallSchedule, tasks, users } from "../../drizzle/schema";
+import { boards, listings, onCallSchedule, slackUserLinks, tasks, users } from "../../drizzle/schema";
 import { ROUTING_TOOLS, runRoutingTool, type SlackContext } from "./routingTools";
 
 /**
@@ -149,9 +149,13 @@ export async function runAgentTool({ name, input, agent, wandUserId, slackContex
         shift: onCallSchedule,
         userName: users.name,
         userEmail: users.email,
+        linkSlackUserId: slackUserLinks.slackUserId,
       })
       .from(onCallSchedule)
       .leftJoin(users, eq(users.id, onCallSchedule.userId))
+      // Fall back to slackUserLinks when the shift doesn't have an explicit
+      // slackUserId — /on-call's UI doesn't always populate that field.
+      .leftJoin(slackUserLinks, eq(slackUserLinks.userId, onCallSchedule.userId))
       .where(
         and(
           eq(onCallSchedule.department, department),
@@ -171,7 +175,7 @@ export async function runAgentTool({ name, input, agent, wandUserId, slackContex
         userId: r.shift.userId,
         name: r.userName,
         email: r.userEmail,
-        slackUserId: r.shift.slackUserId,
+        slackUserId: r.shift.slackUserId ?? r.linkSlackUserId,
         endsAt: r.shift.endsAt,
         notes: r.shift.notes,
       },
