@@ -64,14 +64,14 @@ export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "findListing",
     description:
-      "Search for a Wand listing (property) by name fragment. Use this BEFORE createTaskDraft whenever the message mentions a property — even loosely (e.g. 'Skylar', 'Kimble', 'the bunk room at Quo'). Returns up to 5 candidates with id + name. Pick the best match's id and pass it as listingId to createTaskDraft. If no good match comes back, omit listingId.",
+      "Search for a Wand listing (property) by name. Use this BEFORE createTaskDraft when the message names a property. Returns up to 10 candidates each tagged with a matchType: 'exact' (name equals the query), 'word' (query is a whole word inside a name), 'contains' (query is a substring), or 'none'. CRITICAL RULES: (1) Only pass listingId to createTaskDraft when you get an 'exact' match. (2) Never substitute lookalike property names — 'Skylar' and 'Skyland' are different properties even though they look similar. (3) Never call findListing again with a shorter or modified query trying to force a match — if the literal name has no exact result, the property either doesn't exist in Wand yet or the user used a typo, and a human needs to attach it manually.",
     input_schema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            "Substring to search for. Tries internal name first, then public name. Case-insensitive.",
+            "The property name as it appears in the message, verbatim. Case-insensitive. Do not abbreviate or transform.",
         },
       },
       required: ["query"],
@@ -108,7 +108,7 @@ export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
         listingId: {
           type: "number",
           description:
-            "Wand listing id from findListing. Pass when the message clearly references a specific property; omit when it's a generic / cross-property task.",
+            "Wand listing id from findListing. ONLY pass this when findListing returned an 'exact' matchType for the property name in the message. Never substitute a different listing's id (e.g. don't use Skyland's id when the message says Skylar). When no exact match exists, omit this field and add a short note in the description like '(property X not found — please attach manually)'.",
         },
       },
       required: ["title", "description"],
@@ -207,7 +207,8 @@ export async function runAgentTool({ name, input, agent, wandUserId }: RunToolAr
   if (name === "findListing") {
     const query = String(input?.query ?? "").trim();
     if (!query) return { error: "query is required" };
-    const pattern = `%${query.toLowerCase()}%`;
+    const q = query.toLowerCase();
+    const pattern = `%${q}%`;
     const rows = await db
       .select({
         id: listings.id,
@@ -223,17 +224,50 @@ export async function runAgentTool({ name, input, agent, wandUserId }: RunToolAr
           sql`LOWER(${listings.internalName}) LIKE ${pattern}`
         )
       )
-      .limit(5);
+      .limit(10);
+
+    // Score each row so the agent has explicit signal — not just "5 results."
+    // exact:    a name equals the query (case-insensitive)
+    // word:     query is a whitespace-bounded word inside a name
+    // contains: query is a substring of a name
+    function scoreOne(s: string | null | undefined): "exact" | "word" | "contains" | "none" {
+      if (!s) return "none";
+      const lower = s.toLowerCase();
+      if (lower === q) return "exact";
+      if (new RegExp(`(^|\\W)${q.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(\\W|$)`).test(lower)) return "word";
+      if (lower.includes(q)) return "contains";
+      return "none";
+    }
+    const ranked = rows
+      .map((r) => {
+        const a = scoreOne(r.name);
+        const b = scoreOne(r.internalName);
+        const order = { exact: 3, word: 2, contains: 1, none: 0 } as const;
+        const best = order[a] >= order[b] ? a : b;
+        return {
+          id: r.id,
+          displayName: r.internalName || r.name,
+          name: r.name,
+          internalName: r.internalName,
+          city: r.city,
+          status: r.status,
+          matchType: best,
+        };
+      })
+      .sort(
+        (x, y) =>
+          ({ exact: 3, word: 2, contains: 1, none: 0 }[y.matchType] -
+           { exact: 3, word: 2, contains: 1, none: 0 }[x.matchType])
+      );
+
+    const hasExact = ranked.some((r) => r.matchType === "exact");
     return {
       query,
-      matches: rows.map((r) => ({
-        id: r.id,
-        displayName: r.internalName || r.name,
-        name: r.name,
-        internalName: r.internalName,
-        city: r.city,
-        status: r.status,
-      })),
+      matches: ranked,
+      // Explicit guidance the model should obey:
+      guidance: hasExact
+        ? `One or more listings exactly match "${query}". Use the exact-match listingId.`
+        : `No listing exactly matches "${query}". DO NOT substitute a different property name (e.g. don't use "Skyland" when the message says "Skylar"). Omit listingId in createTaskDraft and add a short note in the description like "(property '${query}' not found in Wand listings — please attach manually)".`,
     };
   }
 
