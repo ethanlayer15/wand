@@ -289,13 +289,155 @@ ${original.text}
 }
 
 /**
+ * Open a DM channel between the bot and a Slack user. Returns the IM
+ * channel id so we can post a confirmation back to the invoker.
+ */
+async function openSlackDm(
+  botToken: string,
+  userId: string
+): Promise<string | null> {
+  const res = await fetch(`${SLACK_API}/conversations.open`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${botToken}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({ users: userId }),
+  });
+  const json = (await res.json()) as {
+    ok: boolean;
+    error?: string;
+    channel?: { id: string };
+  };
+  if (!json.ok) {
+    console.error(`[slack] conversations.open failed: ${json.error}`);
+    return null;
+  }
+  return json.channel?.id ?? null;
+}
+
+/**
+ * Handler for the "Send to Wanda" / "Send to Starry" message shortcut.
+ *
+ * Triggered when a user picks the shortcut from the ⋯ menu on any Slack
+ * message — including private DMs the bot isn't a participant in. The
+ * payload includes the message text + author + originating channel, so
+ * we can capture it without needing to read the channel directly.
+ */
+function makeInteractiveHandler(agentName: AgentName) {
+  return async (req: express.Request, res: express.Response) => {
+    const agent = AGENTS[agentName];
+    const rawBody = (req as any).rawBody as Buffer | undefined;
+    if (!rawBody) {
+      res.status(400).send("missing raw body");
+      return;
+    }
+
+    if (!isAgentConfigured(agentName)) {
+      res.status(503).send("agent not configured");
+      return;
+    }
+
+    const ok = verifySlackSignature(
+      agent.slackSigningSecret,
+      req.header("x-slack-request-timestamp") ?? undefined,
+      req.header("x-slack-signature") ?? undefined,
+      rawBody
+    );
+    if (!ok) {
+      res.status(401).send("invalid signature");
+      return;
+    }
+
+    // Slack interactivity payloads are form-urlencoded with a `payload` field
+    // containing the actual JSON.
+    const params = new URLSearchParams(rawBody.toString("utf8"));
+    const payloadStr = params.get("payload");
+    if (!payloadStr) {
+      res.status(400).send("missing payload");
+      return;
+    }
+    let payload: any;
+    try {
+      payload = JSON.parse(payloadStr);
+    } catch {
+      res.status(400).send("invalid payload json");
+      return;
+    }
+
+    // Ack within 3s, then process async.
+    res.status(200).send();
+
+    if (payload.type !== "message_action") return;
+
+    const teamId: string = payload.team?.id ?? "";
+    const slackUserId: string = payload.user?.id ?? "";
+    const message = payload.message ?? {};
+    const messageText: string = message.text ?? "";
+    const messageAuthor: string = message.user ?? "unknown";
+    const originChannelId: string = payload.channel?.id ?? "";
+    const originChannelName: string = payload.channel?.name ?? "(direct message)";
+
+    if (!messageText.trim()) return;
+
+    const wandUserId = await resolveWandUserFromSlack(teamId, slackUserId);
+
+    const prompt = `A team member used the "Send to ${agent.displayName}" shortcut on a Slack message — propose a task for it.
+
+Process:
+1. Read the message text below.
+2. If it mentions a property (even loosely — "Skylar", "the bunk room at Quo", "Kimble"), call findListing FIRST. Use the matched listing id when you create the task. If no clear match, omit listingId.
+3. Then call createTaskDraft with: a short imperative title (≤80 chars), the message as context in the description, an honest priority/category, and the listingId if you found one.
+4. Reply with a single short line confirming the task title (will be DM'd back to the invoker).
+
+Captured from: #${originChannelName}
+Original author: <@${messageAuthor}>
+Message text:
+"""
+${messageText}
+"""`;
+
+    try {
+      const result = await runAgent({
+        agent: agentName,
+        userMessage: prompt,
+        triggeredBy: "slack",
+        wandUserId,
+      });
+
+      // Reply via DM to the invoker — works even when origin was a DM the bot isn't in.
+      const dmChannel = await openSlackDm(agent.slackBotToken, slackUserId);
+      if (dmChannel) {
+        const reply = result.reply
+          ? result.reply
+          : result.error
+            ? `:warning: ${agent.displayName} hit an error: ${result.error}`
+            : `Captured the message but didn't have anything to add.`;
+        await postSlackMessage(agent.slackBotToken, dmChannel, reply);
+      }
+    } catch (err: any) {
+      console.error(
+        `[slack:${agentName}] interactive shortcut error:`,
+        err.message
+      );
+    }
+  };
+}
+
+/**
  * Mounts the Slack endpoints on an Express app.
  * Must be called BEFORE express.json() middleware so we get the raw body.
  */
 export function registerSlackAgentRoutes(app: express.Express) {
   // Capture raw body for signature verification.
   const rawJson = express.raw({ type: "application/json", limit: "1mb" });
+  // Interactivity payloads come as form-urlencoded; capture as raw too.
+  const rawForm = express.raw({
+    type: "application/x-www-form-urlencoded",
+    limit: "1mb",
+  });
 
+  // Events endpoints
   app.post(
     "/api/slack/wanda/events",
     rawJson,
@@ -314,6 +456,27 @@ export function registerSlackAgentRoutes(app: express.Express) {
       next();
     },
     makeAgentHandler("starry")
+  );
+
+  // Interactivity endpoints (message shortcuts)
+  app.post(
+    "/api/slack/wanda/interactive",
+    rawForm,
+    (req, _res, next) => {
+      (req as any).rawBody = req.body as Buffer;
+      next();
+    },
+    makeInteractiveHandler("wanda")
+  );
+
+  app.post(
+    "/api/slack/starry/interactive",
+    rawForm,
+    (req, _res, next) => {
+      (req as any).rawBody = req.body as Buffer;
+      next();
+    },
+    makeInteractiveHandler("starry")
   );
 
   // Health-check (lets you confirm the route is mounted without sending a real event)
