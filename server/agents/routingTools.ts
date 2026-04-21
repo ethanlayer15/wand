@@ -26,6 +26,7 @@ import {
   listings,
   onCallSchedule,
   slackBots,
+  slackUserLinks,
   users,
 } from "../../drizzle/schema";
 import { AGENTS } from "./identities";
@@ -301,11 +302,16 @@ async function lookupOnCallWithFallback(
   for (const role of ["primary", "backup"] as const) {
     const rows = await db
       .select({
-        slackUserId: onCallSchedule.slackUserId,
+        shiftSlackUserId: onCallSchedule.slackUserId,
+        linkSlackUserId: slackUserLinks.slackUserId,
         name: users.name,
       })
       .from(onCallSchedule)
       .leftJoin(users, eq(users.id, onCallSchedule.userId))
+      // Fall back to the user's Slack link when the shift row doesn't have
+      // an explicit slackUserId. Phase 1's /on-call UI didn't always populate
+      // that field, but anyone linked via /team has a slackUserLinks row.
+      .leftJoin(slackUserLinks, eq(slackUserLinks.userId, onCallSchedule.userId))
       .where(
         and(
           eq(onCallSchedule.department, department),
@@ -316,8 +322,11 @@ async function lookupOnCallWithFallback(
       )
       .orderBy(desc(onCallSchedule.createdAt))
       .limit(1);
-    if (rows.length > 0 && rows[0].slackUserId) {
-      return { slackUserId: rows[0].slackUserId, tier: role, name: rows[0].name };
+    if (rows.length > 0) {
+      const resolved = rows[0].shiftSlackUserId ?? rows[0].linkSlackUserId;
+      if (resolved) {
+        return { slackUserId: resolved, tier: role, name: rows[0].name };
+      }
     }
   }
 
