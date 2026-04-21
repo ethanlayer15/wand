@@ -12,6 +12,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { and, desc, eq, like, lte, gte, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { boards, listings, onCallSchedule, tasks, users } from "../../drizzle/schema";
+import { ROUTING_TOOLS, runRoutingTool, type SlackContext } from "./routingTools";
 
 /**
  * Default board slug each agent owns. The reaction-to-task flow uses this
@@ -22,7 +23,7 @@ const AGENT_DEFAULT_BOARD: Record<"wanda" | "starry", string> = {
   starry: "fivestr_ops",
 };
 
-export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
+const PHASE_1_2_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "getOnCall",
     description:
@@ -116,14 +117,25 @@ export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
   },
 ];
 
+export const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
+  ...PHASE_1_2_TOOLS,
+  ...ROUTING_TOOLS,
+];
+
+const ROUTING_TOOL_NAMES = new Set(ROUTING_TOOLS.map((t) => t.name));
+
 interface RunToolArgs {
   name: string;
   input: any;
   agent: "wanda" | "starry";
   wandUserId?: number;
+  slackContext?: SlackContext;
 }
 
-export async function runAgentTool({ name, input, agent, wandUserId }: RunToolArgs) {
+export async function runAgentTool({ name, input, agent, wandUserId, slackContext }: RunToolArgs) {
+  if (ROUTING_TOOL_NAMES.has(name)) {
+    return runRoutingTool({ name, input, agent, slackContext });
+  }
   const db = await getDb();
   if (!db) return { error: "Database unavailable" };
 
