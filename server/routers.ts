@@ -340,6 +340,37 @@ export const appRouter = router({
         await db.update(listingsTable).set(cleanUpdates).where(eq(listingsTable.id, id));
         return { success: true };
       }),
+
+    /**
+     * Set or clear the Breezeway property link for ANY listing — including
+     * Hostaway-sourced ones. The full updateListing procedure refuses to
+     * touch non-manual rows; this narrower endpoint only writes
+     * `breezewayPropertyId` (an explicit cross-reference, not canonical
+     * data), so it's safe for sync-managed rows.
+     *
+     * Used by the "Link to Breezeway" picker on the listing detail panel
+     * to fix tasks that pushTaskToBreezeway can't auto-resolve.
+     */
+    linkBreezewayProperty: managerProcedure
+      .input(
+        z.object({
+          listingId: z.number(),
+          breezewayPropertyId: z.string().nullable(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { listings: listingsTable } = await import("../drizzle/schema");
+        await db
+          .update(listingsTable)
+          .set({
+            breezewayPropertyId:
+              input.breezewayPropertyId?.trim() || null,
+          })
+          .where(eq(listingsTable.id, input.listingId));
+        return { ok: true };
+      }),
   }),
 
   // Tasks

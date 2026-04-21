@@ -94,6 +94,9 @@ type ListingType = {
   reviewCount?: number | null;
   guestCapacity?: number | null;
   podId?: number | null;
+  breezewayPropertyId?: string | null;
+  hostawayId?: string | null;
+  source?: string | null;
 };
 
 // ── Property Detail Sheet ──────────────────────────────────────────────────
@@ -124,6 +127,60 @@ function PropertyDetailSheet({
   const podName = listing?.podId
     ? podList?.find((p) => p.id === listing.podId)?.name ?? `Pod #${listing.podId}`
     : null;
+
+  // ── Breezeway link picker ─────────────────────────────────────────
+  const { data: bwPropertiesAll } = trpc.listings.breezewayProperties.useQuery(
+    undefined,
+    { enabled: open && !!listing }
+  );
+  const [bwPickerOpen, setBwPickerOpen] = useState(false);
+  const [bwQuery, setBwQuery] = useState("");
+  const linkBwMut = trpc.listings.linkBreezewayProperty.useMutation({
+    onSuccess: () => {
+      utils.listings.list.invalidate();
+      setBwPickerOpen(false);
+      setBwQuery("");
+      toast.success("Breezeway link updated");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Resolve current Breezeway match for display: try explicit link first,
+  // then auto-resolve via referencePropertyId === hostawayId, then exact name.
+  const bwAutoMatch = (() => {
+    if (!listing || !bwPropertiesAll) return null;
+    if (listing.breezewayPropertyId) {
+      return bwPropertiesAll.find(
+        (p: any) => String(p.breezewayId) === String(listing.breezewayPropertyId)
+      );
+    }
+    if (listing.hostawayId) {
+      const ref = bwPropertiesAll.find(
+        (p: any) => p.referencePropertyId === listing.hostawayId
+      );
+      if (ref) return ref;
+    }
+    return bwPropertiesAll.find(
+      (p: any) => p.name?.toLowerCase() === listing.name?.toLowerCase()
+    );
+  })();
+  const bwLinkResolved = !!bwAutoMatch;
+  const bwLinkSource = listing?.breezewayPropertyId
+    ? "explicit"
+    : bwAutoMatch
+      ? "auto"
+      : "missing";
+
+  const filteredBwProps = (bwPropertiesAll ?? []).filter((p: any) => {
+    if (!bwQuery.trim()) return true;
+    const q = bwQuery.toLowerCase();
+    return (
+      p.name?.toLowerCase().includes(q) ||
+      p.breezewayId?.toString().includes(q) ||
+      p.address1?.toLowerCase().includes(q) ||
+      p.city?.toLowerCase().includes(q)
+    );
+  }).slice(0, 50);
 
   // Vendor form state
   const [showVendorForm, setShowVendorForm] = useState(false);
@@ -235,6 +292,107 @@ function PropertyDetailSheet({
                     )}
                   </p>
                 </div>
+              </div>
+
+              {/* Breezeway link */}
+              <div className="rounded-lg border px-3 py-2 bg-muted/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4 text-cyan-600 shrink-0" fill="currentColor"><path d="M12 2 2 7l10 5 10-5-10-5zm0 7L2 14l10 5 10-5-10-5z"/></svg>
+                    <p className="text-xs text-muted-foreground">Breezeway Link</p>
+                  </div>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setBwPickerOpen((v) => !v)}
+                      className="text-xs text-cyan-700 hover:text-cyan-900 underline"
+                    >
+                      {bwPickerOpen ? "Cancel" : bwLinkResolved ? "Change…" : "Link…"}
+                    </button>
+                  )}
+                </div>
+                {bwLinkResolved ? (
+                  <div>
+                    <p className="text-sm font-medium">
+                      {bwAutoMatch?.name}{" "}
+                      <span className="text-xs text-muted-foreground">
+                        (BW #{bwAutoMatch?.breezewayId})
+                      </span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {bwLinkSource === "explicit"
+                        ? "Explicitly linked"
+                        : "Auto-matched (no explicit link)"}
+                      {listing?.breezewayPropertyId && isAdmin && (
+                        <>
+                          {" · "}
+                          <button
+                            type="button"
+                            className="underline hover:text-foreground"
+                            onClick={() => {
+                              if (
+                                confirm(
+                                  "Remove the explicit Breezeway link? Auto-match will still try if it can."
+                                )
+                              )
+                                linkBwMut.mutate({
+                                  listingId: listing!.id,
+                                  breezewayPropertyId: null,
+                                });
+                            }}
+                          >
+                            Unlink
+                          </button>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm italic text-amber-700">
+                    No Breezeway property matched — Push to Breezeway will fail until you link one.
+                  </p>
+                )}
+                {bwPickerOpen && isAdmin && (
+                  <div className="pt-2 space-y-2 border-t">
+                    <Input
+                      placeholder="Search by name, address, or BW id…"
+                      value={bwQuery}
+                      onChange={(e) => setBwQuery(e.target.value)}
+                      className="h-8 text-xs"
+                    />
+                    <div className="max-h-[260px] overflow-y-auto space-y-1">
+                      {filteredBwProps.length === 0 ? (
+                        <p className="text-xs text-muted-foreground italic px-2 py-1">
+                          No Breezeway properties match.
+                        </p>
+                      ) : (
+                        filteredBwProps.map((p: any) => (
+                          <button
+                            type="button"
+                            key={p.breezewayId}
+                            onClick={() =>
+                              linkBwMut.mutate({
+                                listingId: listing!.id,
+                                breezewayPropertyId: String(p.breezewayId),
+                              })
+                            }
+                            disabled={linkBwMut.isPending}
+                            className="w-full text-left px-2 py-1.5 rounded hover:bg-accent border border-transparent hover:border-input"
+                          >
+                            <div className="text-sm">{p.name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              BW #{p.breezewayId}
+                              {p.city ? ` · ${p.city}` : ""}
+                              {p.referencePropertyId
+                                ? ` · ref:${p.referencePropertyId}`
+                                : ""}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <Separator />
