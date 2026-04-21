@@ -19,6 +19,7 @@ import { ENV } from "../_core/env";
 import { getDb } from "../db";
 import { slackUserLinks, users } from "../../drizzle/schema";
 import { eq, and } from "drizzle-orm";
+import { classifyCleanerMessage, getIntentRouting } from "./classifier";
 
 const SLACK_API = "https://slack.com/api";
 
@@ -263,10 +264,35 @@ ${original.text}
       const channel: string = event.channel;
       const threadTs: string | undefined = event.thread_ts ?? event.ts;
 
+      // Phase 4: for Starry DMs (not mentions), pre-classify the message so
+      // the agent loop has a clear intent signal. The classification is
+      // advisory — the agent can re-classify mid-conversation via the tool.
+      let userMessage = text;
+      if (agentName === "starry" && isDm && text.trim().length > 0) {
+        try {
+          const cls = await classifyCleanerMessage(text);
+          const routing = getIntentRouting(cls.intent);
+          userMessage = `[pre-classified by Starry: intent=${cls.intent}, confidence=${cls.confidence.toFixed(2)}, department=${routing.department}${
+            routing.includeWanda ? " + wanda" : ""
+          }${cls.listingHint ? `, listingHint="${cls.listingHint}"` : ""}${
+            cls.taskHint ? `, taskHint="${cls.taskHint}"` : ""
+          }]
+
+Cleaner's DM (verbatim):
+"""
+${text}
+"""
+
+If this is a real escalation (intent is not "other"), resolve the Breezeway task (call getCleanerActiveBreezewayTasks when a taskHint or listingHint is present) and call routeEscalation with the intent, department, breezewayTaskId, listingId, a short paraphrase, and the original text above. Then reply to the cleaner with one sentence confirming who got looped in. If intent=other, just respond conversationally — do not route.`;
+        } catch (err: any) {
+          console.error(`[slack:starry] pre-classification failed:`, err.message);
+        }
+      }
+
       try {
         const result = await runAgent({
           agent: agentName,
-          userMessage: text,
+          userMessage,
           triggeredBy: "slack",
           slack: { channelId: channel, threadTs, userId: slackUser, teamId },
           wandUserId,

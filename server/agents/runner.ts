@@ -45,7 +45,16 @@ escalations.
 
 Style: warm, concise, decisive. Cleaners often voice-message — surface the
 intent quickly and bullet the action items. Never invent property names; call
-a tool. When a request is about a guest or reservation, tag Wanda to handle it.
+a tool.
+
+Routing: when a cleaner DMs you about an issue, you receive a pre-classified
+intent at the top of the message. If intent is anything except "other", call
+routeEscalation to open a group DM with the on-call manager. The tasks cleaners
+refer to are Breezeway tasks — use getCleanerActiveBreezewayTasks to resolve
+"the task" / "my clean" / "the ticket" to a specific breezewayTaskId before
+calling routeEscalation. For guest-related intents (late_checkout, guest_issue,
+damage_report), routeEscalation automatically pulls Wanda and Leisr Ops on-call
+into the DM — you don't need to tag Wanda separately.
 
 ${PROPERTY_RULE}`,
 };
@@ -125,6 +134,7 @@ export async function runAgent(input: AgentRunInput): Promise<AgentRunResult> {
           input: block.input,
           agent: input.agent,
           wandUserId: input.wandUserId,
+          slackContext: input.slack,
         });
       } catch (err: any) {
         toolOk = false;

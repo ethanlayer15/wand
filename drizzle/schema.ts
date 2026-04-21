@@ -1223,3 +1223,39 @@ export const slackUserLinks = mysqlTable("slackUserLinks", {
 
 export type SlackUserLink = typeof slackUserLinks.$inferSelect;
 export type InsertSlackUserLink = typeof slackUserLinks.$inferInsert;
+
+/**
+ * Phase 4 — escalation group DMs.
+ *
+ * One row per private group DM that Wanda/Starry opens when routing a
+ * cleaner's message to an on-call manager. Used both for audit and for the
+ * 60-min loop guard that reuses an existing DM for same-issue follow-ups
+ * instead of spawning a fresh one.
+ *
+ * Dedupe key: (agent, triggerSlackUserId, intent, breezewayTaskId | listingId)
+ * within the `expiresAt` window. A cleaner with a clean AND a maintenance
+ * ticket at the same property should still get two separate DMs — that's why
+ * we dedupe on `breezewayTaskId` when available rather than `listingId`.
+ *
+ * `fallbackTier` records which on-call tier actually handled this escalation:
+ *   "primary"    → normal path
+ *   "backup"     → primary was unstaffed, backup role covered it
+ *   "leadership" → both primary + backup empty, fell through to env-var leadership list
+ *   "none"       → nobody reachable; Starry DM'd the cleaner with an apology
+ */
+export const escalationGroupDms = mysqlTable("escalationGroupDms", {
+  id: int("id").autoincrement().primaryKey(),
+  agent: mysqlEnum("agent", ["wanda", "starry"]).notNull(),
+  triggerSlackUserId: varchar("triggerSlackUserId", { length: 64 }).notNull(),
+  intent: varchar("intent", { length: 64 }).notNull(),
+  listingId: int("listingId"),
+  breezewayTaskId: varchar("breezewayTaskId", { length: 128 }),
+  groupDmChannelId: varchar("groupDmChannelId", { length: 64 }).notNull(),
+  onCallUserIds: json("onCallUserIds").$type<string[]>(),
+  fallbackTier: varchar("fallbackTier", { length: 32 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+});
+
+export type EscalationGroupDm = typeof escalationGroupDms.$inferSelect;
+export type InsertEscalationGroupDm = typeof escalationGroupDms.$inferInsert;
