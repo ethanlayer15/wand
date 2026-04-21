@@ -30,36 +30,33 @@ Department boards: **Leisr Ops**, **Leisr Mgmt**, **5STR Ops**.
 
 ---
 
-## Phase 1 — Foundation (1–2 weeks)
-
-Plumbing everything depends on. **In progress.**
+## Phase 1 — Foundation ✅ shipped
 
 - [x] Schema: `boards`, `onCallSchedule`, `slackBots`, `slackUserLinks` tables
 - [x] Schema: add `boardId`, `visibility`, `ownerUserId`, `ownerAgent` to `tasks`
-- [ ] Migration + backfill: every existing task → "Leisr Ops" board, visibility="board"
-- [ ] tRPC routers:
-  - `boards.list` / `create` / `update`
-  - `onCall.list` / `upsertShift` / `deleteShift` / `getCurrent({ department, role? })`
-- [ ] Admin UI: **On-Call Schedule** page (one screen — table of shifts + add/edit dialog with recurring expansion)
-- [ ] Admin UI: **Boards** settings page (rename, source toggles, slack channel routing)
-- [ ] `server/agents/` runner module — shared wrapper around Anthropic Messages with tool-use loop, prompt caching, and `agentActions` audit logging
-- [ ] Two Slack app shells (Wanda, Starry) — env vars wired, signing-secret verification, `app_mention` + `message.im` event endpoints that ack within 3s and dispatch to the agent runner
+- [x] Migration + backfill applied to TiDB; all 278 legacy tasks → Leisr Ops
+- [x] tRPC routers: `boards.*`, `onCall.*`
+- [x] Admin UI: `/on-call` page (shifts + current-shift summary cards)
+- [x] `server/agents/` runner wraps Anthropic Messages with tool-use loop + `agentActions` audit logging
+- [x] Two Slack apps live (Wanda, Starry) with signing-secret verification, env vars in Railway, `/api/slack/{wanda,starry}/events` mounted
 
-**Exit criteria:** I can DM Wanda "hello" in Slack and get a response routed through the agent runner; the on-call admin page lets you add a shift and `getCurrent` returns the right user.
+Deferred: a dedicated **Boards settings page** (rename, source toggles, per-board Slack channel routing) — not blocking anything; add when first needed.
 
 ---
 
-## Phase 2 — Reactive (1 week)
+## Phase 2 — Reactive ✅ shipped
 
-Make the bots useful before making them autonomous.
+- [x] DM + @-mention handling via the agent runner
+- [x] "What's on my list?" works once the user is linked via `slackUserLinks`
+- [x] Reaction-to-task: `:wand:`, `:memo:`, `:white_check_mark:`, `:ballot_box_with_check:` trigger the propose-a-task flow in-thread
+- [x] Department-board tabs on `/` with per-board task counts + filter
+- [x] "Move to board" + "Property" selects in task detail sheet
+- [x] Slack user linking via `/team` (auto-match by email + manual row)
+- [x] "Send to Wanda/Starry" **message shortcut** works anywhere including private DMs (bypasses the bot-can't-read-DMs constraint)
 
-- [ ] @-mention + DM handling (read thread context, call Wand tools, respond)
-- [ ] "What's on my list?" — task list over Slack, filtered by assignee + visibility
-- [ ] Reaction-to-task: `:wand:` on a Slack message → bot proposes a task in thread → 👍 confirms → task created. Every confirm/reject logged for the learning loop (Phase 6).
-- [ ] Voice messages: Slack `file_share` audio → Whisper → bot replies with cleaned text + bullet action items + "Create task?" prompt
-- [ ] Push personal task → board: a tRPC mutation + Slack command (`/push-task`) that flips visibility from `private` → `board` and assigns a `boardId`
-
-**Exit criteria:** I can voice-message Starry on the go and get a clean task draft back in <30s.
+Deferred:
+- **Voice messages** — Slack audio → Whisper → cleaned transcript + bullets. Build this after Phase 4 since it's most valuable when cleaners are already DM'ing Starry.
+- **`/push-task` slash command** — depends on a "Private Tasks" page we haven't built. Skip until someone actually uses private tasks.
 
 ---
 
@@ -74,14 +71,58 @@ Make the bots useful before making them autonomous.
 
 ---
 
-## Phase 4 — Routing (3–4 days)
+## Phase 4 — Routing (3–4 days) — **NEXT**
 
-- [ ] Cleaner DMs Starry → Starry classifies (Leisr property issue / 5STR ops / general) → looks up on-call → opens private group DM (cleaner + on-call + Starry)
-- [ ] Starry posts a one-line summary in the group DM
-- [ ] If Leisr-property-related, Starry tags Wanda + the right Leisr Ops on-call into the group DM
-- [ ] Loop guard: same cleaner / same property / same intent within 60 min → reuse existing group DM, don't open a new one
+The goal: a cleaner DMs Starry about an issue → Starry classifies it, looks up on-call, and opens a private group DM with the cleaner + the right on-call manager + Starry. If it's Leisr-guest-related, Wanda + the Leisr Ops on-call get pulled in too. The cleaner's original DM thread with Starry gets a short "I looped in Alice, she'll pick it up" reply so they know it's handled.
 
-**Exit criteria:** A cleaner DM about a guest issue lands in front of exactly the right person, with full context, within 30 seconds.
+### What to build
+
+- [ ] **Classification step.** When Starry receives a DM, decide: (a) general chat (reply conversationally, do nothing else), (b) 5STR ops issue (maintenance/clean logistics — route to 5STR Ops on-call), (c) Leisr property/guest issue (route to Leisr Ops on-call + Wanda).
+- [ ] **Group DM open + summary.** Use Slack `conversations.open` with a `users` list (cleaner user id + on-call slack user id + Starry's bot). Post a one-line summary: *"From <cleaner>: <one-line paraphrase>. Context: <property + reservation link if applicable>. Cleaner's original message quoted below."*
+- [ ] **Loop guard.** If Starry already opened a group DM for (cleanerUserId, listingId, intent) in the last 60 min, reuse that DM instead of opening a new one. Need a new table for this — see schema below.
+- [ ] **Cross-tagging.** When the issue is Leisr-guest-related, Wanda joins the group DM (needs a companion `conversations.open` against Wanda's bot token) and Leisr Ops on-call is pulled in. Add a second message tagging the on-call person so they get the notification.
+- [ ] **Agent tools.** Three new tools on the runner: `classifyCleanerMessage(text)`, `routeEscalation({ department, context })` that performs the group-DM open + summary, and `openGroupDm({ userIds, agentToken })` as a lower-level helper.
+- [ ] **Audit.** Each escalation writes an `agentActions` row (+ maybe an `agentSuggestions` row if we want approval before opening) with `{cleanerUserId, department, onCallUserId, groupDmChannelId, intent}`.
+
+### Schema additions needed
+
+```ts
+export const escalationGroupDms = mysqlTable("escalationGroupDms", {
+  id: int("id").autoincrement().primaryKey(),
+  agent: mysqlEnum("agent", ["wanda", "starry"]).notNull(),
+  // The person who triggered it (usually a cleaner)
+  triggerSlackUserId: varchar("triggerSlackUserId", { length: 64 }).notNull(),
+  // Inferred intent so the loop guard can match same-issue follow-ups
+  intent: varchar("intent", { length: 64 }).notNull(), // "maintenance", "guest_checkout", etc.
+  listingId: int("listingId"), // FK → listings.id, nullable for generic
+  // Slack group DM channel id the escalation lives in
+  groupDmChannelId: varchar("groupDmChannelId", { length: 64 }).notNull(),
+  // Who got pulled in (for audit + dedupe)
+  onCallUserIds: json("onCallUserIds").$type<string[]>(), // Slack user ids
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  // When loop-guard window expires (createdAt + 60 min)
+  expiresAt: timestamp("expiresAt").notNull(),
+});
+```
+
+Query this table before opening a new group DM; reuse the existing channel if a non-expired row matches on agent + triggerSlackUserId + intent + listingId.
+
+### Slack scopes needed (add to both apps, then reinstall)
+
+- `mpim:write` — create group DMs
+- `mpim:history` — read group DM messages (for follow-ups inside the escalation DM)
+- Starry already has `im:write`, `im:history`, `chat:write`, `users:read.email` from Phase 2 — those still apply
+
+### Open items to resolve BEFORE coding Phase 4
+
+1. **On-call data — is the `/on-call` admin page actually populated with real shifts?** If not, populate it first. Without real shifts, `getOnCall` returns null and Phase 4 has nothing to route to. Same test: open `/on-call` and confirm the "Leisr Ops — Primary" and "5STR Ops — Primary" cards at the top both show real people.
+2. **What's the intent taxonomy?** Start narrow: `guest_issue`, `maintenance`, `clean_blocked`, `other`. The classifier picks one. We can widen it after a week of real traffic.
+3. **Does the cleaner's Slack user need to be linked to a Wand user row?** For Phase 4 probably not — the cleaner might not even have a Wand account. Starry can work off the Slack user alone. But confirm.
+4. **What happens if nobody is on-call right now?** Either (a) fall back to Leisr/5STR ops leadership (hardcode as a secondary on-call), or (b) post into a shared escalations channel. Pick one before building.
+
+### Exit criteria
+
+A cleaner (real person) DMs Starry something like *"guest is still at Kimble and it's past checkout"* → within 30 seconds, a private group DM appears containing the cleaner, the Leisr Ops on-call manager, Wanda, and Starry — with a one-line summary and the original message quoted. Starry's original DM thread with the cleaner gets a short "looped in Alice" reply.
 
 ---
 
