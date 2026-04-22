@@ -190,7 +190,10 @@ export async function findDuplicateTasks(taskId: number): Promise<DuplicateCandi
     });
   }
 
-  // Sort by similarity descending, take top 5
+  // Sort by similarity descending, take top 5.
+  // Hide anything at or below 50% — the per-source/per-property thresholds
+  // above surface weak same-property matches that in practice aren't
+  // actual duplicates, so we drop them from the card.
   results.sort((a, b) => b.similarity - a.similarity);
-  return results.slice(0, 5);
+  return results.filter((r) => r.similarity > 0.5).slice(0, 5);
 }
