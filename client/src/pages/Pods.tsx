@@ -24,6 +24,14 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   Hexagon,
   Plus,
   Pencil,
@@ -34,6 +42,8 @@ import {
   Wrench,
   MapPin,
   Route,
+  Search,
+  Loader2,
 } from "lucide-react";
 
 const SPECIALTIES = [
@@ -79,6 +89,11 @@ export default function Pods() {
   const [deleteConfirmPod, setDeleteConfirmPod] = useState<(typeof pods)[0] | null>(null);
   const [podForm, setPodForm] = useState<PodFormState>(defaultPodForm);
 
+  // Membership state
+  const [membershipSearch, setMembershipSearch] = useState("");
+  const [membershipPodFilter, setMembershipPodFilter] = useState<string>("all"); // "all" | "unassigned" | "<podId>"
+  const [savingIds, setSavingIds] = useState<Set<number>>(new Set());
+
   // Vendor state
   const [selectedPodId, setSelectedPodId] = useState<number | null>(null);
   const [vendorForm, setVendorForm] = useState<VendorFormState>(defaultVendorForm);
@@ -98,6 +113,23 @@ export default function Pods() {
     { enabled: selectedPodId !== null }
   );
   const vendors = podDetailQuery.data?.vendors ?? [];
+
+  // Membership data
+  const propertiesQuery = trpc.pods.properties.useQuery();
+  const properties = propertiesQuery.data ?? [];
+
+  const filteredMembershipProperties = properties.filter((prop) => {
+    const q = membershipSearch.trim().toLowerCase();
+    if (q) {
+      const haystack = [prop.internalName ?? "", prop.name ?? "", prop.city ?? ""]
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    if (membershipPodFilter === "unassigned") return prop.podId === null;
+    if (membershipPodFilter !== "all") return String(prop.podId) === membershipPodFilter;
+    return true;
+  });
 
   // Mutations — Pod
   const createMutation = trpc.pods.create.useMutation({
@@ -142,6 +174,34 @@ export default function Pods() {
     },
     onError: (e) => toast.error(`Seeding failed: ${e.message}`),
   });
+
+  // Mutations — Membership
+  const assignPropertiesMutation = trpc.pods.assignProperties.useMutation();
+  const unassignPropertiesMutation = trpc.pods.unassignProperties.useMutation();
+
+  async function changePropertyPod(listingId: number, newValue: string) {
+    setSavingIds((prev) => new Set(prev).add(listingId));
+    try {
+      if (newValue === "unassigned") {
+        await unassignPropertiesMutation.mutateAsync({ listingIds: [listingId] });
+      } else {
+        await assignPropertiesMutation.mutateAsync({
+          podId: Number(newValue),
+          listingIds: [listingId],
+        });
+      }
+      await Promise.all([propertiesQuery.refetch(), podsQuery.refetch()]);
+      toast.success("Pod updated");
+    } catch (e: any) {
+      toast.error(`Failed to update pod: ${e.message}`);
+    } finally {
+      setSavingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(listingId);
+        return next;
+      });
+    }
+  }
 
   // Mutations — Vendor
   const createVendorMutation = trpc.pods.createVendor.useMutation({
@@ -245,6 +305,7 @@ export default function Pods() {
       <Tabs defaultValue="pods">
         <TabsList>
           <TabsTrigger value="pods">Pods</TabsTrigger>
+          <TabsTrigger value="memberships">Memberships</TabsTrigger>
           <TabsTrigger value="vendors">Vendors</TabsTrigger>
         </TabsList>
 
@@ -321,6 +382,120 @@ export default function Pods() {
                 </Card>
               ))}
             </div>
+          )}
+        </TabsContent>
+
+        {/* ── Memberships Tab ──────────────────────────────────────── */}
+        <TabsContent value="memberships" className="mt-4 space-y-3">
+          {!isAdmin ? (
+            <p className="text-sm text-muted-foreground">
+              Admin access required to edit pod memberships.
+            </p>
+          ) : (
+            <>
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[220px] max-w-sm">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    className="h-8 pl-7 text-sm"
+                    placeholder="Search by name or city…"
+                    value={membershipSearch}
+                    onChange={(e) => setMembershipSearch(e.target.value)}
+                  />
+                </div>
+                <Select
+                  value={membershipPodFilter}
+                  onValueChange={setMembershipPodFilter}
+                >
+                  <SelectTrigger className="w-52 h-8 text-sm">
+                    <SelectValue placeholder="Filter by pod" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All pods</SelectItem>
+                    <SelectItem value="unassigned">Unassigned only</SelectItem>
+                    {pods.map((p) => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {filteredMembershipProperties.length} of {properties.length}
+                </span>
+              </div>
+
+              {/* Table */}
+              {propertiesQuery.isLoading ? (
+                <p className="text-sm text-muted-foreground">Loading properties…</p>
+              ) : properties.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active properties.</p>
+              ) : (
+                <div className="rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="h-9">Property</TableHead>
+                        <TableHead className="h-9">Location</TableHead>
+                        <TableHead className="h-9 w-52">Pod</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredMembershipProperties.map((prop) => {
+                          const isSaving = savingIds.has(prop.id);
+                          const currentValue = prop.podId === null ? "unassigned" : String(prop.podId);
+                          const displayName = prop.internalName || prop.name;
+                          const location = [prop.city, prop.state].filter(Boolean).join(", ");
+                          return (
+                            <TableRow key={prop.id}>
+                              <TableCell className="py-2">
+                                <span className="text-sm font-medium">{displayName}</span>
+                                {prop.internalName && prop.name && prop.internalName !== prop.name && (
+                                  <span className="block text-xs text-muted-foreground truncate">
+                                    {prop.name}
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className="py-2 text-xs text-muted-foreground">
+                                {location || <span className="italic">—</span>}
+                              </TableCell>
+                              <TableCell className="py-2">
+                                <div className="flex items-center gap-2">
+                                  <Select
+                                    value={currentValue}
+                                    onValueChange={(v) => {
+                                      if (v !== currentValue) changePropertyPod(prop.id, v);
+                                    }}
+                                    disabled={isSaving}
+                                  >
+                                    <SelectTrigger className="h-8 text-sm">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="unassigned">
+                                        <span className="italic text-muted-foreground">Unassigned</span>
+                                      </SelectItem>
+                                      {pods.map((p) => (
+                                        <SelectItem key={p.id} value={String(p.id)}>
+                                          {p.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {isSaving && (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
           )}
         </TabsContent>
 
