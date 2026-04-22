@@ -41,7 +41,7 @@ import {
   getBreezewayProperties,
 } from "./db";
 import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis, breezewayTeam } from "../drizzle/schema";
-import { eq, desc, gte, and, or, inArray, isNotNull } from "drizzle-orm";
+import { eq, desc, gte, and, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
 import {
   syncCompletedCleans,
@@ -233,8 +233,20 @@ export const compensationRouter = router({
           cleansByListing.set(c.listingId, arr);
         }
 
-        // Get reviews in the date range
-        const recentReviews = await db.select().from(reviews).where(gte(reviews.submittedAt, fromDate));
+        // Get reviews in the date range — anchor on guest check-out
+        // (departureDate) to match calculateCleanerRollingScore so the
+        // cached score and this detail view stay in sync. Fall back to
+        // submittedAt for older rows where Hostaway never populated
+        // departureDate.
+        const recentReviews = await db.select().from(reviews).where(
+          or(
+            gte(reviews.departureDate, fromDate),
+            and(
+              isNull(reviews.departureDate),
+              gte(reviews.submittedAt, fromDate),
+            ),
+          ),
+        );
 
         // Get AI analyses
         const { reviewAnalysis } = await import("../drizzle/schema");

@@ -18,7 +18,7 @@ import {
   weeklyPaySnapshots,
   cleanerReceipts,
 } from "../drizzle/schema";
-import { eq, and, desc, gte, or, inArray, sql } from "drizzle-orm";
+import { eq, and, desc, gte, or, inArray, isNull, sql } from "drizzle-orm";
 import { getMultiplierTier, DEFAULT_MULTIPLIER_TIERS } from "./compensationConfig";
 import {
   isScorableClean,
@@ -152,8 +152,20 @@ export const cleanerDashboardRouter = router({
         cleansByListing.set(c.listingId, arr);
       }
 
+      // Anchor reviews on guest check-out (departureDate) to match
+      // calculateCleanerRollingScore so the cached rolling score and the
+      // cleaner's own dashboard stay in sync. Fall back to submittedAt
+      // for older rows where Hostaway never populated departureDate.
       const relevantReviews = reviewCutoff
-        ? await db.select().from(reviews).where(gte(reviews.submittedAt, reviewCutoff))
+        ? await db.select().from(reviews).where(
+            or(
+              gte(reviews.departureDate, reviewCutoff),
+              and(
+                isNull(reviews.departureDate),
+                gte(reviews.submittedAt, reviewCutoff),
+              ),
+            ),
+          )
         : await db.select().from(reviews);
 
       const allAnalyses = await db.select().from(reviewAnalysis);
