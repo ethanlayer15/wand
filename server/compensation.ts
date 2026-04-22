@@ -111,8 +111,9 @@ const MAX_ATTRIBUTION_LOOKBACK_DAYS = 14;
 
 /**
  * Pick THE clean responsible for a guest's stay: the most recent scorable
- * clean on the listing that happened on or before the review's arrival
- * (allowing up to 1 day after, for same-day turnovers logged late).
+ * clean on the listing whose calendar date is on or before the guest's
+ * arrival. A clean that happens AFTER the guest checks in can't be
+ * responsible for the cleanliness they experienced, so we reject it.
  *
  * Returns null if no clean on that listing happened within
  * MAX_ATTRIBUTION_LOOKBACK_DAYS of arrival — this prevents an unrelated
@@ -123,23 +124,26 @@ export function findResponsibleClean(
   cleansForListing: CleanForMatching[],
 ): CleanForMatching | null {
   if (cleansForListing.length === 0) return null;
-  const arrivalMs = arrivalDate.getTime();
-  const maxLookbackMs = MAX_ATTRIBUTION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
-  const oneDayAfterMs = 1 * 24 * 60 * 60 * 1000;
+  const arrivalDay = startOfDayUtc(arrivalDate);
 
   let best: CleanForMatching | null = null;
-  let bestDelta = Infinity;
+  let bestDayDelta = Infinity;
   for (const clean of cleansForListing) {
     if (!isScorableClean(clean.taskTitle)) continue;
-    const delta = arrivalMs - clean.scheduledDate.getTime();
-    if (delta < -oneDayAfterMs) continue; // clean too far after arrival
-    if (delta > maxLookbackMs) continue; // clean too far before arrival
-    if (delta < bestDelta) {
+    const cleanDay = startOfDayUtc(clean.scheduledDate);
+    const dayDelta = (arrivalDay - cleanDay) / (24 * 60 * 60 * 1000);
+    if (dayDelta < 0) continue; // clean happened after the guest arrived
+    if (dayDelta > MAX_ATTRIBUTION_LOOKBACK_DAYS) continue; // too far before
+    if (dayDelta < bestDayDelta) {
       best = clean;
-      bestDelta = delta;
+      bestDayDelta = dayDelta;
     }
   }
   return best;
+}
+
+function startOfDayUtc(d: Date): number {
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
 /**
