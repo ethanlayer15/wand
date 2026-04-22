@@ -168,6 +168,18 @@ export function isPartnerDupeClean(clean: Pick<CleanForMatching, "breezewayTaskI
   return clean.breezewayTaskId.endsWith("-partner");
 }
 
+/**
+ * Normalize a review's overall rating to a 1-5 scale. Airbnb reports
+ * ratings on a 10-point scale; VRBO / Booking / direct use 1-5. Anything
+ * > 5 is divided by 2 so every displayed and computed rating lives on
+ * the same scale. Null stays null — callers decide whether to hide or
+ * substitute a default.
+ */
+export function normalizeRating(rating: number | null | undefined): number | null {
+  if (rating == null) return null;
+  return rating > 5 ? rating / 2 : rating;
+}
+
 export type ReviewForScoring = {
   source: string | null;
   rating: number | null;
@@ -210,11 +222,7 @@ export function cleaningScoreForReview(
   const hasCleaningIssue = analysis?.issues?.some((i) => i?.type === "cleaning") ?? false;
   const isAirbnb = review.source === "airbnb";
   if (hasCleaningIssue) {
-    const normalized = review.rating
-      ? review.rating > 5
-        ? review.rating / 2
-        : review.rating
-      : 3;
+    const normalized = normalizeRating(review.rating) ?? 3;
     return {
       score: normalized,
       reason: isAirbnb

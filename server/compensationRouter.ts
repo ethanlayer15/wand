@@ -24,6 +24,7 @@ import {
   findResponsibleClean,
   cleanAssigneeIds,
   cleaningScoreForReview,
+  normalizeRating,
   type CleanForMatching,
 } from "./compensation";
 import {
@@ -298,7 +299,7 @@ export const compensationRouter = router({
             listingId: review.listingId,
             listingName: listing?.internalName || listing?.name || `Listing #${review.listingId}`,
             source: review.source || "unknown",
-            rating: review.rating,
+            rating: normalizeRating(review.rating),
             cleanlinessRating: review.cleanlinessRating,
             scoreUsed,
             scoreReason,

@@ -24,12 +24,12 @@ import {
   getLatestAnalysisJob,
   stopAnalysisJob,
 } from "./aiAnalysis";
+import { normalizeRating as normalizeRatingShared } from "./compensation";
 
-// Normalize any rating to 5-star scale (Booking.com/VRBO use 10-point)
+// 5-point normalization, but default null → 0 for averaging/math callers.
 function normalizeRating(rating: number | null | undefined): number {
-  if (!rating) return 0;
-  return rating > 5 ? rating / 2 : rating;
-};
+  return normalizeRatingShared(rating) ?? 0;
+}
 
 // Best-available date for a review's time-window filtering. We anchor to the
 // guest's CHECK-OUT date (departureDate) rather than when the review was

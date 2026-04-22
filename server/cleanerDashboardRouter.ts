@@ -26,6 +26,7 @@ import {
   findResponsibleClean,
   cleanAssigneeIds,
   cleaningScoreForReview,
+  normalizeRating,
   type CleanForMatching,
 } from "./compensation";
 import { storagePut } from "./storage";
@@ -213,7 +214,7 @@ export const cleanerDashboardRouter = router({
           id: review.id,
           propertyName: listing?.internalName || listing?.name || `Property #${review.listingId}`,
           source: review.source || "unknown",
-          rating: review.rating,
+          rating: normalizeRating(review.rating),
           cleanlinessRating: review.cleanlinessRating,
           scoreUsed,
           scoreReason,
