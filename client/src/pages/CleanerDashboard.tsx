@@ -572,6 +572,16 @@ function CleanerDashboard({ token }: CleanerDashboardProps) {
                               Matched clean: {review.matchedCleanDate}
                             </span>
                           )}
+                          {review.matchedCleanReportUrl && (
+                            <a
+                              href={review.matchedCleanReportUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-indigo-300 underline hover:text-indigo-100"
+                            >
+                              Cleaner report
+                            </a>
+                          )}
                         </div>
 
                         {/* Public review */}
