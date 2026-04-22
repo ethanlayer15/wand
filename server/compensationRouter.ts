@@ -20,6 +20,11 @@ import {
   calculateMileageReimbursement,
   calculateCleanBonus,
   isScorableClean,
+  isPartnerDupeClean,
+  findResponsibleClean,
+  cleanAssigneeIds,
+  cleaningScoreForReview,
+  type CleanForMatching,
 } from "./compensation";
 import {
   runCleanerAttribution,
@@ -36,7 +41,7 @@ import {
   getBreezewayProperties,
 } from "./db";
 import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis, breezewayTeam } from "../drizzle/schema";
-import { eq, desc, gte, and, isNotNull } from "drizzle-orm";
+import { eq, desc, gte, and, or, inArray, isNotNull } from "drizzle-orm";
 import { getWeekOfMonday } from "./payCalculation";
 import {
   syncCompletedCleans,
@@ -185,18 +190,45 @@ export const compensationRouter = router({
         const cleansFromDate = new Date();
         cleansFromDate.setDate(cleansFromDate.getDate() - (input.daysBack + 15)); // wider window for cleans
 
-        // Get cleans
+        // Listings this cleaner has worked on in the window (as primary or paired)
         const cleanerCleans = await db.select().from(completedCleans).where(
-          and(eq(completedCleans.cleanerId, input.cleanerId), gte(completedCleans.scheduledDate, cleansFromDate))
+          and(
+            or(
+              eq(completedCleans.cleanerId, input.cleanerId),
+              eq(completedCleans.pairedCleanerId, input.cleanerId),
+            ),
+            gte(completedCleans.scheduledDate, cleansFromDate),
+          ),
         );
 
-        // Build listing → clean dates map (scorable only)
-        const cleansByListing = new Map<number, { date: Date; title: string }[]>();
-        for (const c of cleanerCleans) {
+        const listingIds = Array.from(
+          new Set(cleanerCleans.map((c) => c.listingId).filter((id): id is number => id != null)),
+        );
+
+        // ALL scorable cleans on those listings in the window — pick the
+        // clean responsible for each guest stay across all cleaners, then
+        // check whether the current cleaner is on it.
+        const allListingCleans = listingIds.length
+          ? await db.select().from(completedCleans).where(
+              and(inArray(completedCleans.listingId, listingIds), gte(completedCleans.scheduledDate, cleansFromDate)),
+            )
+          : [];
+
+        const cleansByListing = new Map<number, CleanForMatching[]>();
+        for (const c of allListingCleans) {
           if (!c.listingId || !c.scheduledDate) continue;
+          if (isPartnerDupeClean(c)) continue;
           if (!isScorableClean(c.taskTitle)) continue;
-          const arr = cleansByListing.get(c.listingId) || [];
-          arr.push({ date: new Date(c.scheduledDate), title: c.taskTitle || "" });
+          const entry: CleanForMatching = {
+            id: c.id,
+            scheduledDate: new Date(c.scheduledDate),
+            taskTitle: c.taskTitle,
+            cleanerId: c.cleanerId,
+            pairedCleanerId: c.pairedCleanerId,
+            breezewayTaskId: c.breezewayTaskId,
+          };
+          const arr = cleansByListing.get(c.listingId) ?? [];
+          arr.push(entry);
           cleansByListing.set(c.listingId, arr);
         }
 
@@ -231,61 +263,20 @@ export const compensationRouter = router({
           matchedCleanTitle: string | null;
         }> = [];
 
-        const listingIds = [...cleansByListing.keys()];
-
         for (const review of recentReviews) {
           if (!review.listingId) continue;
-          if (!listingIds.includes(review.listingId)) continue;
+          const cleansOnListing = cleansByListing.get(review.listingId);
+          if (!cleansOnListing) continue;
 
-          const cleanEntries = cleansByListing.get(review.listingId);
-          if (!cleanEntries) continue;
+          const arrival = review.arrivalDate || review.submittedAt;
+          if (!arrival) continue;
 
-          const reviewDate = review.arrivalDate || review.submittedAt;
-          if (!reviewDate) continue;
+          const responsible = findResponsibleClean(arrival, cleansOnListing);
+          if (!responsible) continue;
+          if (!cleanAssigneeIds(responsible).includes(input.cleanerId)) continue;
 
-          // Find matching clean
-          let matchedClean = cleanEntries.find((c) => {
-            const diff = (reviewDate.getTime() - c.date.getTime()) / (1000 * 60 * 60 * 24);
-            return diff >= -1 && diff <= 3;
-          });
-          if (!matchedClean) {
-            const before = cleanEntries.filter((c) => c.date.getTime() <= reviewDate.getTime())
-              .sort((a, b) => b.date.getTime() - a.date.getTime());
-            matchedClean = before[0] ?? null;
-          }
-          if (!matchedClean) continue;
-
-          // Determine score
-          const isAirbnb = review.source === "airbnb";
-          let scoreUsed: number | null = null;
-          let scoreReason = "";
-
-          if (isAirbnb && review.cleanlinessRating) {
-            scoreUsed = review.cleanlinessRating;
-            scoreReason = "Airbnb cleanliness sub-score";
-          } else if (!isAirbnb) {
-            const analysis = analysisMap.get(review.id);
-            const hasCleaningIssue = (analysis as any)?.issues?.some((i: any) => i.type === "cleaning") ?? false;
-            if (hasCleaningIssue) {
-              scoreUsed = review.rating ? (review.rating > 5 ? review.rating / 2 : review.rating) : 3;
-              scoreReason = "Cleaning issue detected — used overall rating";
-            } else {
-              scoreUsed = 5;
-              scoreReason = "No cleaning issues — default 5";
-            }
-          } else if (isAirbnb && !review.cleanlinessRating) {
-            const analysis = analysisMap.get(review.id);
-            const hasCleaningIssue = (analysis as any)?.issues?.some((i: any) => i.type === "cleaning") ?? false;
-            if (hasCleaningIssue) {
-              scoreUsed = review.rating ? (review.rating > 5 ? review.rating / 2 : review.rating) : 3;
-              scoreReason = "Airbnb (no sub-score) — cleaning issue detected";
-            } else {
-              scoreUsed = 5;
-              scoreReason = "Airbnb (no sub-score) — no issues";
-            }
-          }
-
-          if (scoreUsed === null) continue;
+          const analysis = analysisMap.get(review.id);
+          const { score: scoreUsed, reason: scoreReason } = cleaningScoreForReview(review, (analysis as any) ?? null);
 
           const listing = listingMap.get(review.listingId);
           matchedReviews.push({
@@ -302,8 +293,8 @@ export const compensationRouter = router({
             privateFeedback: review.privateFeedback || null,
             arrivalDate: review.arrivalDate?.toISOString().slice(0, 10) ?? null,
             submittedAt: review.submittedAt?.toISOString().slice(0, 10) ?? null,
-            matchedCleanDate: matchedClean.date.toISOString().slice(0, 10),
-            matchedCleanTitle: matchedClean.title,
+            matchedCleanDate: responsible.scheduledDate.toISOString().slice(0, 10),
+            matchedCleanTitle: responsible.taskTitle,
           });
         }
 
@@ -331,11 +322,15 @@ export const compensationRouter = router({
           );
         }
 
+        const cleanerScorableCount = cleanerCleans.filter((c) =>
+          isScorableClean(c.taskTitle) && !isPartnerDupeClean(c),
+        ).length;
+
         return {
           cleaner: { id: cleaner.id, name: cleaner.name, email: cleaner.email },
           daysBack: input.daysBack,
           totalCleans: cleanerCleans.length,
-          scorableCleans: [...cleansByListing.values()].flat().length,
+          scorableCleans: cleanerScorableCount,
           reviewCount: matchedReviews.length,
           avgScore,
           reviews: matchedReviews,

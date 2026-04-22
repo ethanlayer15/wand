@@ -14,7 +14,7 @@
  * New cleaners default to 1.0x until they establish a 30-day score history.
  */
 
-import { eq, sql, and, or, gte, lte, isNull } from "drizzle-orm";
+import { eq, sql, and, or, gte, lte, isNull, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   cleaners,
@@ -96,6 +96,135 @@ export function isScorableClean(taskTitle: string | null | undefined): boolean {
   return false;
 }
 
+// ── Shared review scoring + attribution helpers ────────────────────
+
+export type CleanForMatching = {
+  id: number;
+  scheduledDate: Date;
+  taskTitle: string | null;
+  cleanerId: number | null;
+  pairedCleanerId: number | null;
+  breezewayTaskId: string;
+};
+
+const MAX_ATTRIBUTION_LOOKBACK_DAYS = 14;
+
+/**
+ * Pick THE clean responsible for a guest's stay: the most recent scorable
+ * clean on the listing that happened on or before the review's arrival
+ * (allowing up to 1 day after, for same-day turnovers logged late).
+ *
+ * Returns null if no clean on that listing happened within
+ * MAX_ATTRIBUTION_LOOKBACK_DAYS of arrival — this prevents an unrelated
+ * old clean from being attributed to a much-later guest stay.
+ */
+export function findResponsibleClean(
+  arrivalDate: Date,
+  cleansForListing: CleanForMatching[],
+): CleanForMatching | null {
+  if (cleansForListing.length === 0) return null;
+  const arrivalMs = arrivalDate.getTime();
+  const maxLookbackMs = MAX_ATTRIBUTION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const oneDayAfterMs = 1 * 24 * 60 * 60 * 1000;
+
+  let best: CleanForMatching | null = null;
+  let bestDelta = Infinity;
+  for (const clean of cleansForListing) {
+    if (!isScorableClean(clean.taskTitle)) continue;
+    const delta = arrivalMs - clean.scheduledDate.getTime();
+    if (delta < -oneDayAfterMs) continue; // clean too far after arrival
+    if (delta > maxLookbackMs) continue; // clean too far before arrival
+    if (delta < bestDelta) {
+      best = clean;
+      bestDelta = delta;
+    }
+  }
+  return best;
+}
+
+/**
+ * Return the set of cleaner IDs responsible for a given clean.
+ * Includes `cleanerId` and `pairedCleanerId` if present.
+ */
+export function cleanAssigneeIds(clean: CleanForMatching): number[] {
+  const ids: number[] = [];
+  if (clean.cleanerId != null) ids.push(clean.cleanerId);
+  if (clean.pairedCleanerId != null) ids.push(clean.pairedCleanerId);
+  return ids;
+}
+
+/**
+ * Breezeway paired cleans are stored as two rows per logical clean
+ * (a primary and a "<taskId>-partner" record). For attribution we only
+ * need the primary row — its cleanerId + pairedCleanerId already name
+ * both assignees.
+ */
+export function isPartnerDupeClean(clean: Pick<CleanForMatching, "breezewayTaskId">): boolean {
+  return clean.breezewayTaskId.endsWith("-partner");
+}
+
+export type ReviewForScoring = {
+  source: string | null;
+  rating: number | null;
+  cleanlinessRating: number | null;
+};
+
+export type ReviewAnalysisForScoring = {
+  issues?: Array<{ type?: string | null }> | null;
+} | null | undefined;
+
+export type ReviewScoreResult = {
+  score: number;
+  reason: string;
+};
+
+/**
+ * Pick the 1-5 cleaning score for a review.
+ *
+ * Priority:
+ * 1. If the review has an explicit cleanlinessRating sub-score (primarily
+ *    Airbnb, but any platform that provides one), use it directly.
+ * 2. Otherwise, if AI analysis detected a cleaning issue, normalize the
+ *    overall rating to a 1-5 scale.
+ * 3. Otherwise, count as 5 (no cleaning issues).
+ */
+export function cleaningScoreForReview(
+  review: ReviewForScoring,
+  analysis: ReviewAnalysisForScoring,
+): ReviewScoreResult {
+  if (review.cleanlinessRating != null) {
+    return {
+      score: review.cleanlinessRating,
+      reason:
+        review.source === "airbnb"
+          ? "Airbnb cleanliness sub-score"
+          : "Cleanliness sub-score",
+    };
+  }
+
+  const hasCleaningIssue = analysis?.issues?.some((i) => i?.type === "cleaning") ?? false;
+  const isAirbnb = review.source === "airbnb";
+  if (hasCleaningIssue) {
+    const normalized = review.rating
+      ? review.rating > 5
+        ? review.rating / 2
+        : review.rating
+      : 3;
+    return {
+      score: normalized,
+      reason: isAirbnb
+        ? "Airbnb (no sub-score) — cleaning issue detected"
+        : "Cleaning issue detected — used overall rating",
+    };
+  }
+  return {
+    score: 5,
+    reason: isAirbnb
+      ? "Airbnb (no sub-score) — no issues"
+      : "No cleaning issues — default 5",
+  };
+}
+
 // ── Rolling Score Calculation ───────────────────────────────────────
 
 /**
@@ -137,41 +266,68 @@ export async function calculateCleanerRollingScore(cleanerName: string, cleanerI
   const fortyFiveDaysAgo = new Date();
   fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45);
 
+  // Listings this cleaner has worked on recently (as primary OR paired)
   const cleanerCleans = await db.select()
     .from(completedCleans)
     .where(
       and(
-        eq(completedCleans.cleanerId, cId),
-        gte(completedCleans.scheduledDate, fortyFiveDaysAgo)
-      )
+        or(
+          eq(completedCleans.cleanerId, cId),
+          eq(completedCleans.pairedCleanerId, cId),
+        ),
+        gte(completedCleans.scheduledDate, fortyFiveDaysAgo),
+      ),
     );
 
   if (cleanerCleans.length === 0) {
     return { score: null, reviewCount: 0, multiplier: 1.0 };
   }
 
-  // Build a map: listingId → clean dates for this cleaner
-  // Only include turnover cleans and deep cleans for scoring
-  const cleansByListing = new Map<number, Date[]>();
-  for (const clean of cleanerCleans) {
-    if (!clean.listingId || !clean.scheduledDate) continue;
-    if (!isScorableClean(clean.taskTitle)) continue;
-    const existing = cleansByListing.get(clean.listingId) || [];
-    existing.push(new Date(clean.scheduledDate));
-    cleansByListing.set(clean.listingId, existing);
-  }
-
-  // Get reviews from the last 30 days for properties this cleaner has cleaned.
-  // Anchor the window on the guest's CHECK-OUT date (departureDate) so a
-  // late-posted review for a 60-day-old stay does not count toward the
-  // cleaner's current rolling score. For older rows where Hostaway never
-  // populated departureDate, fall back to submittedAt to avoid silently
-  // dropping them.
-  const listingIds = [...cleansByListing.keys()];
+  const listingIds = Array.from(
+    new Set(cleanerCleans.map((c) => c.listingId).filter((id): id is number => id != null)),
+  );
   if (listingIds.length === 0) {
     return { score: null, reviewCount: 0, multiplier: 1.0 };
   }
 
+  // ALL scorable cleans on those listings within a window that covers the
+  // full review range (30 days) plus the attribution lookback. We need the
+  // full picture — not just this cleaner's rows — so we can identify THE
+  // clean responsible for each guest stay instead of attributing unrelated
+  // old cleans via a too-broad fallback.
+  const cleanWindowStart = new Date();
+  cleanWindowStart.setDate(cleanWindowStart.getDate() - (45 + MAX_ATTRIBUTION_LOOKBACK_DAYS));
+
+  const allListingCleans = await db
+    .select()
+    .from(completedCleans)
+    .where(
+      and(
+        inArray(completedCleans.listingId, listingIds),
+        gte(completedCleans.scheduledDate, cleanWindowStart),
+      ),
+    );
+
+  const cleansByListing = new Map<number, CleanForMatching[]>();
+  for (const clean of allListingCleans) {
+    if (!clean.listingId || !clean.scheduledDate) continue;
+    if (isPartnerDupeClean(clean)) continue;
+    if (!isScorableClean(clean.taskTitle)) continue;
+    const entry: CleanForMatching = {
+      id: clean.id,
+      scheduledDate: new Date(clean.scheduledDate),
+      taskTitle: clean.taskTitle,
+      cleanerId: clean.cleanerId,
+      pairedCleanerId: clean.pairedCleanerId,
+      breezewayTaskId: clean.breezewayTaskId,
+    };
+    const list = cleansByListing.get(clean.listingId) ?? [];
+    list.push(entry);
+    cleansByListing.set(clean.listingId, list);
+  }
+
+  // Reviews from the last 30 days anchored on check-out date. Fall back to
+  // submittedAt for older rows where Hostaway never populated departureDate.
   const recentReviews = await db.select()
     .from(reviews)
     .where(
@@ -184,85 +340,25 @@ export async function calculateCleanerRollingScore(cleanerName: string, cleanerI
       )
     );
 
-  // Get AI analyses for cleaning issue detection (for non-Airbnb reviews)
   const allAnalyses = await db.select().from(reviewAnalysis);
   const analysisMap = new Map(allAnalyses.map((a) => [a.reviewId, a]));
 
-  // Match reviews to this cleaner's cleans
   const cleaningScores: number[] = [];
 
   for (const review of recentReviews) {
     if (!review.listingId) continue;
-    const cleanDates = cleansByListing.get(review.listingId);
-    if (!cleanDates) continue; // This cleaner didn't clean this property
+    const cleansOnListing = cleansByListing.get(review.listingId);
+    if (!cleansOnListing) continue;
 
-    // Check if the cleaner's clean date was before the review's arrival/departure
-    // The clean should have happened before or on the arrival date
-    const reviewArrival = review.arrivalDate ? new Date(review.arrivalDate) : null;
-    const reviewDeparture = review.departureDate ? new Date(review.departureDate) : null;
-    const reviewDate = reviewArrival || review.submittedAt;
-    if (!reviewDate) continue;
+    const arrival = review.arrivalDate ? new Date(review.arrivalDate) : review.submittedAt;
+    if (!arrival) continue;
 
-    // Find a clean that was scheduled within 3 days before the guest's arrival
-    // (turnover cleans typically happen same day or day before check-in)
-    let matchingClean = cleanDates.find((cleanDate) => {
-      const diffMs = reviewDate.getTime() - cleanDate.getTime();
-      const diffDays = diffMs / (1000 * 60 * 60 * 24);
-      return diffDays >= -1 && diffDays <= 3; // clean was 1 day after to 3 days before arrival
-    });
+    const responsible = findResponsibleClean(arrival, cleansOnListing);
+    if (!responsible) continue;
+    if (!cleanAssigneeIds(responsible).includes(cId)) continue;
 
-    // Fallback: if no exact date match, use the most recent clean at this
-    // property that happened BEFORE the guest's arrival. This covers cases
-    // where clean dates or arrival dates are slightly off.
-    if (!matchingClean) {
-      const beforeArrival = cleanDates
-        .filter((d) => d.getTime() <= reviewDate.getTime())
-        .sort((a, b) => b.getTime() - a.getTime());
-      matchingClean = beforeArrival[0] ?? null;
-    }
-
-    if (!matchingClean) continue; // No matching clean for this review
-
-    // Determine the cleaning score for this review
-    const isAirbnb = review.source === "airbnb";
-
-    if (isAirbnb && review.cleanlinessRating) {
-      // Rule 1: Airbnb reviews — use cleanliness sub-score directly
-      cleaningScores.push(review.cleanlinessRating);
-    } else if (!isAirbnb) {
-      // Rule 2: Non-Airbnb reviews
-      const analysis = analysisMap.get(review.id);
-      const hasCleaningIssue = analysis?.issues?.some(
-        (i) => i.type === "cleaning"
-      ) ?? false;
-
-      if (hasCleaningIssue) {
-        // Negative cleaning mentioned → use overall rating (normalized to 5)
-        const rating = review.rating
-          ? (review.rating > 5 ? review.rating / 2 : review.rating)
-          : 3;
-        cleaningScores.push(rating);
-      } else {
-        // No cleaning issues → count as 5
-        cleaningScores.push(5);
-      }
-    } else if (isAirbnb && !review.cleanlinessRating) {
-      // Airbnb but no cleanliness sub-score available — fall back to AI analysis
-      const analysis = analysisMap.get(review.id);
-      const hasCleaningIssue = analysis?.issues?.some(
-        (i) => i.type === "cleaning"
-      ) ?? false;
-
-      if (hasCleaningIssue) {
-        const rating = review.rating
-          ? (review.rating > 5 ? review.rating / 2 : review.rating)
-          : 3;
-        cleaningScores.push(rating);
-      } else {
-        // No cleaning issues and it's Airbnb → count as 5
-        cleaningScores.push(5);
-      }
-    }
+    const { score } = cleaningScoreForReview(review, analysisMap.get(review.id) ?? null);
+    cleaningScores.push(score);
   }
 
   if (cleaningScores.length === 0) {
