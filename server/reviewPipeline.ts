@@ -76,18 +76,8 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
       continue;
     }
 
-    // Map channel to source
-    let source: "airbnb" | "vrbo" | "booking" | "direct" = "airbnb";
-    if (review.channelId) {
-      // Hostaway channel IDs: 2005/2018 = Airbnb, 2004 = VRBO, 2003 = Booking.com, 2002 = direct/other
-      if (review.channelId === 2004) source = "vrbo";
-      else if (review.channelId === 2003) source = "booking";
-      else if (review.channelId === 2005 || review.channelId === 2018) source = "airbnb";
-      else source = "direct";
-    }
-
     // Extract Airbnb cleanliness sub-score.
-    // Hostaway actually returns sub-scores in a `reviewCategory` array (singular)
+    // Hostaway returns sub-scores in a `reviewCategory` array (singular)
     // of { category: "cleanliness", rating: N } objects — NOT the nested
     // `categoryRatings` / `subRatings` objects we were previously checking.
     // Airbnb uses a 10-point scale; normalize to 5-point for consistency.
@@ -109,6 +99,18 @@ export async function syncHostawayReviews(): Promise<{ synced: number; total: nu
     } else if (cleanlinessRating == null && review.subRatings?.cleanliness) {
       cleanlinessRating = Number(review.subRatings.cleanliness);
     }
+
+    // Map channel to source. Hostaway channel IDs: 2005/2018 = Airbnb,
+    // 2004 = VRBO, 2003 = Booking.com. When channelId is missing or an
+    // unrecognized value, fall back to the cleanlinessRating signal —
+    // it's an Airbnb-exclusive field, so its presence is authoritative.
+    let source: "airbnb" | "vrbo" | "booking" | "direct";
+    if (review.channelId === 2004) source = "vrbo";
+    else if (review.channelId === 2003) source = "booking";
+    else if (review.channelId === 2005 || review.channelId === 2018) source = "airbnb";
+    else if (cleanlinessRating != null) source = "airbnb";
+    else if (review.channelId) source = "direct";
+    else source = "airbnb";
 
     // Extract host response from Hostaway payload. Hostaway exposes this in
     // a few possible shapes depending on channel — check all of them.

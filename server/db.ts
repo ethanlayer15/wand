@@ -215,6 +215,26 @@ export async function getDb() {
           console.warn("[Database] Board backfill skipped:", e.message);
         }
       }
+
+      // ── Backfill: reviews with cleanlinessRating → source = "airbnb" ─
+      // cleanlinessRating is Airbnb-exclusive; any review that has one
+      // but was tagged "direct"/"vrbo"/"booking" was misclassified by the
+      // earlier channelId-only logic. Idempotent — safe on every boot.
+      try {
+        const [r] = await _pool
+          .promise()
+          .query(
+            `UPDATE reviews
+                SET source = 'airbnb'
+              WHERE cleanlinessRating IS NOT NULL AND source <> 'airbnb'`
+          );
+        const affected = (r as any)?.affectedRows ?? 0;
+        if (affected > 0) {
+          console.log(`[Database] Backfilled source=airbnb for ${affected} review(s)`);
+        }
+      } catch (e: any) {
+        console.warn("[Database] Review source backfill skipped:", e.message);
+      }
     } catch (error) {
       console.warn("[Database] Failed to create pool:", error);
       _db = null;
