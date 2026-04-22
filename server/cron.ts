@@ -22,6 +22,7 @@ import { getBreezewaySyncConfig } from "./db";
 import { sendAllWeeklyPayReports, sendReceiptReminders } from "./emailReports";
 import { runReviewDrafter } from "./agent/reviewDrafter";
 import { syncBreezewayTeam, syncHostawayListings } from "./sync";
+import { runUrgentTaskDigest } from "./agents/urgentDigest";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -70,6 +71,54 @@ function msUntilDayHourET(dayOfWeek: number, hour: number): number {
   target.setUTCDate(target.getUTCDate() + daysUntil);
 
   return target.getTime() - now.getTime();
+}
+
+/**
+ * Calculate ms until the next occurrence of a specific hour (ET timezone).
+ * If the hour has already passed today (ET), returns ms until that hour
+ * tomorrow (ET).
+ */
+function msUntilHourET(hour: number): number {
+  const now = new Date();
+  const month = now.getUTCMonth();
+  const utcOffset = (month >= 2 && month <= 10) ? 4 : 5; // EDT vs EST
+  const utcHour = (hour + utcOffset) % 24;
+  const target = new Date(now);
+  target.setUTCHours(utcHour, 0, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return target.getTime() - now.getTime();
+}
+
+/**
+ * Schedule a job to run at specific ET hours every day. Fires at each hour
+ * ET, repeating daily. Use this for user-facing times (so 9 AM ET stays
+ * 9 AM ET regardless of server TZ or DST).
+ */
+function scheduleAtHoursET(
+  name: string,
+  hours: number[],
+  callback: () => Promise<void>,
+): void {
+  for (const hour of hours) {
+    const delay = msUntilHourET(hour);
+    const delayMin = Math.round(delay / 60_000);
+    console.log(`[Cron] Scheduling "${name}" at ${hour}:00 ET (in ~${delayMin} min)`);
+
+    const firstTimer = setTimeout(() => {
+      callback().catch((err) =>
+        console.error(`[Cron] "${name}" @${hour}:00 ET failed:`, err.message),
+      );
+      const dailyTimer = setInterval(() => {
+        callback().catch((err) =>
+          console.error(`[Cron] "${name}" @${hour}:00 ET failed:`, err.message),
+        );
+      }, ONE_DAY_MS);
+      timers.push(dailyTimer);
+    }, delay);
+    timers.push(firstTimer);
+  }
 }
 
 /**
@@ -276,6 +325,14 @@ export function startCronJobs(): void {
 
   // 5. Review pipeline — 5× daily on same schedule as guest messages
   scheduleAtHours("Review Pipeline", [7, 11, 14, 17, 20], runReviewPipeline);
+
+  // Urgent-task digest — Wanda posts to #Leisr Ops at 9 AM + 2 PM ET
+  // listing urgent tasks with no activity in the last 24h. Module
+  // handles its own dedupe via agentActions.
+  scheduleAtHoursET("Urgent Task Digest", [9, 14], async () => {
+    const outcome = await runUrgentTaskDigest();
+    console.log(`[Cron] Urgent digest:`, outcome);
+  });
 
   // 6. Review Reply Drafter — 2× daily after review pipeline
   scheduleAtHours("Review Drafter", [9, 15], async () => {
