@@ -226,6 +226,7 @@ export const compensationRouter = router({
             cleanerId: c.cleanerId,
             pairedCleanerId: c.pairedCleanerId,
             breezewayTaskId: c.breezewayTaskId,
+            reportUrl: c.reportUrl ?? null,
           };
           const arr = cleansByListing.get(c.listingId) ?? [];
           arr.push(entry);
@@ -261,6 +262,7 @@ export const compensationRouter = router({
           submittedAt: string | null;
           matchedCleanDate: string | null;
           matchedCleanTitle: string | null;
+          matchedCleanReportUrl: string | null;
         }> = [];
 
         for (const review of recentReviews) {
@@ -289,12 +291,13 @@ export const compensationRouter = router({
             scoreUsed,
             scoreReason,
             guestName: review.guestName,
-            publicReview: review.publicReview || null,
+            publicReview: review.text || null,
             privateFeedback: review.privateFeedback || null,
             arrivalDate: review.arrivalDate?.toISOString().slice(0, 10) ?? null,
             submittedAt: review.submittedAt?.toISOString().slice(0, 10) ?? null,
             matchedCleanDate: responsible.scheduledDate.toISOString().slice(0, 10),
             matchedCleanTitle: responsible.taskTitle,
+            matchedCleanReportUrl: responsible.reportUrl ?? null,
           });
         }
 

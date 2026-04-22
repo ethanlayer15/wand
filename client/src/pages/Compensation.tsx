@@ -1442,6 +1442,16 @@ function CleanerScoreDetail({
                             Matched clean: {r.matchedCleanDate}
                           </span>
                         )}
+                        {r.matchedCleanReportUrl && (
+                          <a
+                            href={r.matchedCleanReportUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-indigo-600 underline hover:text-indigo-800"
+                          >
+                            Cleaner report
+                          </a>
+                        )}
                       </div>
 
                       {/* Public review */}

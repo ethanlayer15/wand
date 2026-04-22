@@ -105,6 +105,7 @@ export type CleanForMatching = {
   cleanerId: number | null;
   pairedCleanerId: number | null;
   breezewayTaskId: string;
+  reportUrl: string | null;
 };
 
 const MAX_ATTRIBUTION_LOOKBACK_DAYS = 14;
@@ -324,6 +325,7 @@ export async function calculateCleanerRollingScore(cleanerName: string, cleanerI
       cleanerId: clean.cleanerId,
       pairedCleanerId: clean.pairedCleanerId,
       breezewayTaskId: clean.breezewayTaskId,
+      reportUrl: clean.reportUrl ?? null,
     };
     const list = cleansByListing.get(clean.listingId) ?? [];
     list.push(entry);

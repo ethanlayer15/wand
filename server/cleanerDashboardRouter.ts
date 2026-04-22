@@ -145,6 +145,7 @@ export const cleanerDashboardRouter = router({
           cleanerId: c.cleanerId,
           pairedCleanerId: c.pairedCleanerId,
           breezewayTaskId: c.breezewayTaskId,
+          reportUrl: c.reportUrl ?? null,
         };
         const arr = cleansByListing.get(c.listingId) ?? [];
         arr.push(entry);
@@ -176,6 +177,7 @@ export const cleanerDashboardRouter = router({
         submittedAt: string | null;
         reviewDate: Date | null;
         matchedCleanDate: string | null;
+        matchedCleanReportUrl: string | null;
         excerpt: string | null;
       }> = [];
 
@@ -204,12 +206,13 @@ export const cleanerDashboardRouter = router({
           scoreUsed,
           scoreReason,
           guestName: review.guestName ?? "Guest",
-          publicReview: review.publicReview || null,
+          publicReview: review.text || null,
           privateFeedback: review.privateFeedback || null,
           arrivalDate: review.arrivalDate?.toISOString().slice(0, 10) ?? null,
           submittedAt: review.submittedAt?.toISOString().slice(0, 10) ?? null,
           reviewDate: review.submittedAt ?? review.createdAt ?? null,
           matchedCleanDate: responsible.scheduledDate.toISOString().slice(0, 10),
+          matchedCleanReportUrl: responsible.reportUrl ?? null,
           excerpt: analysis?.summary ?? null,
         });
       }
