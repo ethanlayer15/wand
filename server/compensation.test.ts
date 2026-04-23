@@ -8,9 +8,6 @@ import {
   getMultiplierLabel,
   getNextTierInfo,
   calculateMileageReimbursement,
-  calculateCleanBonus,
-  BEDROOM_TIERS,
-  BASE_HOURLY_RATE,
   IRS_MILEAGE_RATE,
   DOCKING_PENALTY,
 } from "./compensation";

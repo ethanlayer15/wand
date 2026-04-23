@@ -14,7 +14,6 @@ import {
   getMultiplierForScore,
   getMultiplierLabel,
   getNextTierInfo,
-  BEDROOM_TIERS,
   updatePropertyCompensationFields,
   bulkUpdatePropertyCompensation,
   calculateMileageReimbursement,
@@ -25,6 +24,7 @@ import {
   cleanAssigneeIds,
   cleaningScoreForReview,
   normalizeRating,
+  baseBonusFromCleaningFee,
   type CleanForMatching,
 } from "./compensation";
 import {
@@ -576,13 +576,9 @@ export const compensationRouter = router({
         internalName: l.internalName,
         city: l.city,
         state: l.state,
-        bedroomTier: l.bedroomTier,
         distanceFromStorage: l.distanceFromStorage,
         cleaningFeeCharge: l.cleaningFeeCharge,
         podId: l.podId ?? null,
-        bedroomTierLabel: l.bedroomTier
-          ? BEDROOM_TIERS.find((t) => t.tier === l.bedroomTier)?.label ?? `Tier ${l.bedroomTier}`
-          : null,
       }));
     }),
 
@@ -590,13 +586,11 @@ export const compensationRouter = router({
     update: protectedProcedure
       .input(z.object({
         listingId: z.number(),
-        bedroomTier: z.number().min(1).max(5).nullable().optional(),
         distanceFromStorage: z.string().nullable().optional(),
         cleaningFeeCharge: z.string().nullable().optional(),
       }))
       .mutation(async ({ input }) => {
         await updatePropertyCompensationFields(input.listingId, {
-          bedroomTier: input.bedroomTier,
           distanceFromStorage: input.distanceFromStorage,
           cleaningFeeCharge: input.cleaningFeeCharge,
         });
@@ -608,7 +602,6 @@ export const compensationRouter = router({
       .input(z.object({
         updates: z.array(z.object({
           listingId: z.number(),
-          bedroomTier: z.number().min(1).max(5).nullable().optional(),
           distanceFromStorage: z.string().nullable().optional(),
           cleaningFeeCharge: z.string().nullable().optional(),
         })),
@@ -616,16 +609,6 @@ export const compensationRouter = router({
       .mutation(async ({ input }) => {
         return bulkUpdatePropertyCompensation(input.updates);
       }),
-  }),
-
-  // ── Reference data ────────────────────────────────────────────────
-
-  tiers: publicProcedure.query(() => {
-    return BEDROOM_TIERS.map((t) => ({
-      ...t,
-      // Include calculated values for reference
-      baseHourlyPay: 14.0 * t.expectedHours,
-    }));
   }),
 
   // ── Attribution ──────────────────────────────────────────────────
@@ -811,28 +794,22 @@ export const compensationRouter = router({
 
   estimateClean: publicProcedure
     .input(z.object({
-      bedroomTier: z.number().min(1).max(5),
+      cleaningFee: z.number().min(0),
       multiplier: z.number(),
       distanceFromStorage: z.number(),
       isThirdHouseOrMore: z.boolean().default(false),
     }))
     .query(({ input }) => {
-      const tier = BEDROOM_TIERS.find((t) => t.tier === input.bedroomTier) ?? BEDROOM_TIERS[0];
-      const baseHourly = 14.0 * tier.expectedHours;
-      const { baseBonus, adjustedBonus, dockPenalty } = calculateCleanBonus(input.bedroomTier, input.multiplier);
+      const { baseBonus, adjustedBonus, dockPenalty } = calculateCleanBonus(input.cleaningFee, input.multiplier);
       const mileage = calculateMileageReimbursement(input.distanceFromStorage, input.isThirdHouseOrMore);
-
       return {
-        baseHourly: Number(baseHourly.toFixed(2)),
         baseBonus,
         adjustedBonus,
         mileage,
         dockPenalty,
-        totalEstimate: Number((baseHourly + adjustedBonus + mileage - dockPenalty).toFixed(2)),
+        totalEstimate: Number((adjustedBonus + mileage - dockPenalty).toFixed(2)),
         breakdown: {
-          tier: tier.label,
-          expectedHours: tier.expectedHours,
-          hourlyRate: 14.0,
+          cleaningFee: input.cleaningFee,
           multiplier: input.multiplier,
           distanceMiles: input.distanceFromStorage,
         },

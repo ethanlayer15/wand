@@ -269,6 +269,23 @@ export async function getDb() {
         console.warn("[Database] Review channelId backfill skipped:", e.message);
       }
 
+      // ── Migration: drop listings.bedroomTier ───────────────────────────
+      // Replaced by the fee-based pay formula (10% of cleaningFeeCharge,
+      // rounded up to $10) in April 2026. Historical weekly pay snapshots
+      // retain their own numbers so no data needs to be preserved.
+      // Idempotent via the Unknown-column guard.
+      try {
+        await _pool
+          .promise()
+          .query(`ALTER TABLE listings DROP COLUMN bedroomTier`);
+        console.log("[Database] Dropped listings.bedroomTier column");
+      } catch (e: any) {
+        const msg = e.message ?? "";
+        if (!msg.includes("check that column/key exists") && !msg.includes("doesn't exist") && !msg.includes("Unknown column")) {
+          console.warn("[Database] bedroomTier drop skipped:", msg);
+        }
+      }
+
       // ── Migration + backfill: listings.onboardingStatus ────────────────
       // New properties from the Hostaway sync land in "pending" so they
       // show up in the Onboarding queue until an admin assigns pod +

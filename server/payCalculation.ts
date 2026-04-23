@@ -13,11 +13,12 @@
  * They see "base pay per clean" and tier names only.
  */
 
-import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { eq, and, gte, lte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   cleaners,
   completedCleans,
+  listings,
   weeklyPaySnapshots,
   cleanerReceipts,
   Cleaner,
@@ -31,6 +32,7 @@ import {
   DEFAULT_VOLUME_TIERS,
   DEFAULT_REIMBURSEMENT_TIERS,
 } from "./compensationConfig";
+import { baseBonusFromCleaningFee } from "./compensation";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -121,20 +123,34 @@ export async function calculateWeeklyPay(
       )
     );
 
-  // Calculate base pay applying split ratio for paired cleans
-  // - Solo clean: splitRatio = 1.00 (full cleaning fee)
-  // - Paired clean: splitRatio = 0.50 (half the cleaning fee)
-  const totalCleaningFees = cleans.reduce(
-    (sum, c) => sum + Number(c.cleaningFee ?? 0) * Number(c.splitRatio ?? 1),
-    0
+  // Base pay per clean = 10% of the customer's cleaning fee, rounded up to
+  // the nearest $10 (via baseBonusFromCleaningFee). splitRatio halves the
+  // amount for paired cleans. Replaces the older "full cleaning fee =
+  // base pay" formula as of the 2026-04-22 pay period.
+  const basePay = Number(
+    cleans
+      .reduce(
+        (sum, c) =>
+          sum + baseBonusFromCleaningFee(c.cleaningFee) * Number(c.splitRatio ?? 1),
+        0,
+      )
+      .toFixed(2),
   );
-  const basePay = totalCleaningFees;
 
-  // Volume credit also uses split ratio (each cleaner gets half toward their tier)
-  const volumeCredit = cleans.reduce(
-    (sum, c) => sum + Number(c.cleaningFee ?? 0) * Number(c.splitRatio ?? 1),
-    0
+  // weeklyRevenue tracks the customer-facing cleaning fee total (hidden
+  // from cleaners) so we can report back business-side revenue.
+  const totalCleaningFees = Number(
+    cleans
+      .reduce(
+        (sum, c) => sum + Number(c.cleaningFee ?? 0) * Number(c.splitRatio ?? 1),
+        0,
+      )
+      .toFixed(2),
   );
+
+  // Volume credit uses the new base-bonus amount (so a cleaner's volume
+  // tier reflects what they actually earn, not the customer-facing fee).
+  const volumeCredit = basePay;
 
   // Quality multiplier (trailing 30-day score from cleaner record)
   // Quality score from paired cleans is attributed equally to both cleaners
@@ -214,10 +230,13 @@ export async function calculateWeeklyPay(
     cleans: cleans.map((c) => {
       const fee = Number(c.cleaningFee ?? 0);
       const ratio = Number(c.splitRatio ?? 1);
+      const basePerClean = baseBonusFromCleaningFee(c.cleaningFee);
       return {
         propertyName: c.propertyName ?? "Unknown",
         cleaningFee: fee,
-        effectiveFee: Number((fee * ratio).toFixed(2)),
+        // effectiveFee is now the cleaner's actual pay contribution from
+        // this clean: ceil(fee * 10% / 10) * 10 × splitRatio.
+        effectiveFee: Number((basePerClean * ratio).toFixed(2)),
         distanceMiles: Number(c.distanceMiles ?? 0),
         scheduledDate: c.scheduledDate,
         isPaired: c.pairedCleanerId !== null && c.pairedCleanerId !== undefined,
@@ -226,6 +245,44 @@ export async function calculateWeeklyPay(
       };
     }),
   };
+}
+
+/**
+ * Sanity-check before running payroll: every scorable clean in the week
+ * must live on a listing that has already been onboarded (i.e. has a
+ * cleaningFeeCharge set). If any clean in the period points at a listing
+ * with a null fee, surface the property names so the admin can finish
+ * onboarding before payroll is generated.
+ */
+export async function assertAllCleansOnboarded(weekOf: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  const offenders = await db
+    .select({
+      listingId: listings.id,
+      listingName: listings.name,
+      internalName: listings.internalName,
+    })
+    .from(completedCleans)
+    .leftJoin(listings, eq(completedCleans.listingId, listings.id))
+    .where(
+      and(
+        eq(completedCleans.weekOf, weekOf),
+        sql`(${listings.cleaningFeeCharge} IS NULL OR ${listings.onboardingStatus} = 'pending')`,
+      ),
+    )
+    .groupBy(listings.id, listings.name, listings.internalName);
+
+  if (offenders.length === 0) return;
+  const names = offenders
+    .map((o) => o.internalName || o.listingName || `listing #${o.listingId}`)
+    .join(", ");
+  throw new Error(
+    `Cannot run payroll for week ${weekOf}: ${offenders.length} ` +
+      `${offenders.length === 1 ? "property has" : "properties have"} ` +
+      `cleans in this week but no cleaning fee set — onboard them first: ${names}`,
+  );
 }
 
 /**
@@ -300,6 +357,7 @@ export async function saveWeeklyPaySnapshot(
 export async function runWeeklyPayCalculation(
   weekOf: string
 ): Promise<{ processed: number; saved: number; errors: string[] }> {
+  await assertAllCleansOnboarded(weekOf);
   const breakdowns = await calculateAllWeeklyPay(weekOf);
   let saved = 0;
   const errors: string[] = [];

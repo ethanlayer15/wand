@@ -73,15 +73,14 @@ import { useState, useMemo, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 
-// ── Types ─────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────
 
-const BEDROOM_TIER_LABELS: Record<number, string> = {
-  1: "1 BR / Studio",
-  2: "2 Bedrooms",
-  3: "3 Bedrooms",
-  4: "4 Bedrooms",
-  5: "5+ Bedrooms",
-};
+/** Preview: 10% of the customer cleaning fee, rounded up to the nearest $10. */
+function baseBonusPreview(fee: number | null | undefined): number {
+  const n = typeof fee === "number" ? fee : Number(fee ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.ceil((n * 0.1) / 10) * 10;
+}
 
 // ── Main Component ──────────────────────────────────────────────────
 
@@ -168,10 +167,9 @@ function PropertiesTab() {
   const [showAutoAssign, setShowAutoAssign] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editValues, setEditValues] = useState<{
-    bedroomTier: number | null;
     distanceFromStorage: string;
     cleaningFeeCharge: string;
-  }>({ bedroomTier: null, distanceFromStorage: "", cleaningFeeCharge: "" });
+  }>({ distanceFromStorage: "", cleaningFeeCharge: "" });
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [bulkData, setBulkData] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -196,7 +194,6 @@ function PropertiesTab() {
   const startEdit = (p: typeof filtered[0]) => {
     setEditingId(p.id);
     setEditValues({
-      bedroomTier: p.bedroomTier,
       distanceFromStorage: p.distanceFromStorage ?? "",
       cleaningFeeCharge: p.cleaningFeeCharge ?? "",
     });
@@ -206,7 +203,6 @@ function PropertiesTab() {
     if (editingId === null) return;
     updateMutation.mutate({
       listingId: editingId,
-      bedroomTier: editValues.bedroomTier,
       distanceFromStorage: editValues.distanceFromStorage || null,
       cleaningFeeCharge: editValues.cleaningFeeCharge || null,
     });
@@ -217,31 +213,27 @@ function PropertiesTab() {
     setEditingId(null);
   };
 
-  // Bulk import parsing: expects CSV or tab-separated
-  // Format: PropertyName, BedroomTier, DistanceFromStorage, CleaningFeeCharge
+  // Bulk import parsing: expects CSV or tab-separated.
+  // Format: PropertyName, DistanceFromStorage, CleaningFeeCharge
   const parseBulkData = useCallback(() => {
     if (!properties) return [];
     const lines = bulkData.trim().split("\n").filter((l) => l.trim());
     const updates: Array<{
       listingId: number;
       propertyName: string;
-      bedroomTier: number | null;
       distanceFromStorage: string | null;
       cleaningFeeCharge: string | null;
       matched: boolean;
     }> = [];
 
     for (const line of lines) {
-      // Support CSV or tab-separated
       const parts = line.includes("\t") ? line.split("\t") : line.split(",");
       if (parts.length < 2) continue;
 
       const name = parts[0].trim();
-      const tier = parseInt(parts[1]?.trim() ?? "");
-      const distance = parts[2]?.trim() ?? "";
-      const fee = parts[3]?.trim() ?? "";
+      const distance = parts[1]?.trim() ?? "";
+      const fee = parts[2]?.trim() ?? "";
 
-      // Try to match by name (fuzzy)
       const match = properties.find(
         (p) =>
           (p.internalName || p.name).toLowerCase().includes(name.toLowerCase()) ||
@@ -251,7 +243,6 @@ function PropertiesTab() {
       updates.push({
         listingId: match?.id ?? 0,
         propertyName: name,
-        bedroomTier: isNaN(tier) ? null : Math.min(5, Math.max(1, tier)),
         distanceFromStorage: distance || null,
         cleaningFeeCharge: fee || null,
         matched: !!match,
@@ -282,7 +273,6 @@ function PropertiesTab() {
     bulkUpdateMutation.mutate({
       updates: matched.map((p) => ({
         listingId: p.listingId,
-        bedroomTier: p.bedroomTier,
         distanceFromStorage: p.distanceFromStorage,
         cleaningFeeCharge: p.cleaningFeeCharge,
       })),
@@ -290,7 +280,7 @@ function PropertiesTab() {
   };
 
   // Stats
-  const configured = properties?.filter((p) => p.bedroomTier !== null).length ?? 0;
+  const configured = properties?.filter((p) => p.cleaningFeeCharge != null).length ?? 0;
   const total = properties?.length ?? 0;
 
   if (isLoading) return <Skeleton className="h-96" />;
@@ -362,7 +352,7 @@ function PropertiesTab() {
             </DialogHeader>
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Paste CSV or tab-separated data. Format: <code>Property Name, Bedroom Tier (1-5), Distance (miles), Cleaning Fee ($)</code>
+                Paste CSV or tab-separated data. Format: <code>Property Name, Distance (miles), Cleaning Fee ($)</code>
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
@@ -379,7 +369,7 @@ function PropertiesTab() {
               </div>
               <textarea
                 className="w-full h-48 p-3 text-sm font-mono border rounded-md bg-muted/30"
-                placeholder={`Mountain Cabin, 3, 12.5, 250\nBeach House, 4, 8.2, 350\nStudio Apt, 1, 2.0, 125`}
+                placeholder={`Mountain Cabin, 12.5, 250\nBeach House, 8.2, 350\nStudio Apt, 2.0, 125`}
                 value={bulkData}
                 onChange={(e) => setBulkData(e.target.value)}
               />
@@ -391,7 +381,6 @@ function PropertiesTab() {
                       <TableHeader>
                         <TableRow>
                           <TableHead className="text-xs">Property</TableHead>
-                          <TableHead className="text-xs">Tier</TableHead>
                           <TableHead className="text-xs">Distance</TableHead>
                           <TableHead className="text-xs">Fee</TableHead>
                           <TableHead className="text-xs">Match</TableHead>
@@ -401,7 +390,6 @@ function PropertiesTab() {
                         {parseBulkData().map((row, i) => (
                           <TableRow key={i}>
                             <TableCell className="text-xs">{row.propertyName}</TableCell>
-                            <TableCell className="text-xs">{row.bedroomTier ?? "—"}</TableCell>
                             <TableCell className="text-xs">{row.distanceFromStorage ?? "—"}</TableCell>
                             <TableCell className="text-xs">{row.cleaningFeeCharge ? `$${row.cleaningFeeCharge}` : "—"}</TableCell>
                             <TableCell className="text-xs">
@@ -452,9 +440,9 @@ function PropertiesTab() {
                 <TableHead className="text-xs">Property</TableHead>
                 <TableHead className="text-xs">Location</TableHead>
                 <TableHead className="text-xs">POD</TableHead>
-                <TableHead className="text-xs text-center">Bedroom Tier</TableHead>
                 <TableHead className="text-xs text-center">Distance (mi)</TableHead>
                 <TableHead className="text-xs text-center">Cleaning Fee</TableHead>
+                <TableHead className="text-xs text-center">Base Pay</TableHead>
                 <TableHead className="text-xs text-center w-20">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -474,41 +462,6 @@ function PropertiesTab() {
                       </Badge>
                     ) : (
                       <span className="text-[10px] text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-center">
-                    {editingId === p.id ? (
-                      <Select
-                        value={editValues.bedroomTier?.toString() ?? "none"}
-                        onValueChange={(v) =>
-                          setEditValues((prev) => ({
-                            ...prev,
-                            bedroomTier: v === "none" ? null : parseInt(v),
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="h-8 text-xs w-28 mx-auto">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">Not set</SelectItem>
-                          {[1, 2, 3, 4, 5].map((t) => (
-                            <SelectItem key={t} value={t.toString()}>
-                              {BEDROOM_TIER_LABELS[t]}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <span className="text-xs">
-                        {p.bedroomTier ? (
-                          <Badge variant="outline" className="text-[10px]">
-                            {BEDROOM_TIER_LABELS[p.bedroomTier] ?? `Tier ${p.bedroomTier}`}
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </span>
                     )}
                   </TableCell>
                   <TableCell className="text-center">
@@ -554,6 +507,17 @@ function PropertiesTab() {
                         {p.cleaningFeeCharge ? `$${Number(p.cleaningFeeCharge).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
                       </span>
                     )}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <span className="text-xs">
+                      {p.cleaningFeeCharge ? (
+                        <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                          ${baseBonusPreview(Number(p.cleaningFeeCharge))}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </span>
                   </TableCell>
                   <TableCell className="text-center">
                     {editingId === p.id ? (
@@ -1536,21 +1500,20 @@ function MultiplierBadge({ multiplier, hasScore }: { multiplier: number; hasScor
 // ── Pay Calculator Tab ──────────────────────────────────────────────
 
 function PayCalculatorTab() {
-  const { data: tiers } = trpc.compensation.tiers.useQuery();
-  const [bedroomTier, setBedroomTier] = useState(3);
+  const [cleaningFee, setCleaningFee] = useState(250);
   const [multiplier, setMultiplier] = useState("1.2");
   const [distance, setDistance] = useState(10);
   const [isThirdHouse, setIsThirdHouse] = useState(false);
 
   const multNum = parseFloat(multiplier);
   const { data: estimate } = trpc.compensation.estimateClean.useQuery(
-    { bedroomTier, multiplier: multNum, distanceFromStorage: distance, isThirdHouseOrMore: isThirdHouse },
+    { cleaningFee, multiplier: multNum, distanceFromStorage: distance, isThirdHouseOrMore: isThirdHouse },
   );
 
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground">
-        Estimate cleaner compensation for a single clean based on the tiered hybrid pay model.
+        Estimate cleaner compensation for a single clean. Base pay = 10% of the cleaning fee, rounded up to the nearest $10.
       </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1558,19 +1521,15 @@ function PayCalculatorTab() {
         <Card className="p-5 space-y-4">
           <h3 className="font-semibold">Clean Parameters</h3>
           <div>
-            <label className="text-xs font-medium">Bedroom Tier</label>
-            <Select value={bedroomTier.toString()} onValueChange={(v) => setBedroomTier(parseInt(v))}>
-              <SelectTrigger className="mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {[1, 2, 3, 4, 5].map((t) => (
-                  <SelectItem key={t} value={t.toString()}>
-                    {BEDROOM_TIER_LABELS[t]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <label className="text-xs font-medium">Cleaning Fee ($)</label>
+            <Input
+              type="number"
+              min="0"
+              step="5"
+              value={cleaningFee}
+              onChange={(e) => setCleaningFee(parseFloat(e.target.value) || 0)}
+              className="mt-1"
+            />
           </div>
           <div>
             <label className="text-xs font-medium">Score Multiplier</label>
@@ -1614,16 +1573,7 @@ function PayCalculatorTab() {
           {estimate ? (
             <div className="space-y-3">
               <div className="flex justify-between items-center py-2 border-b">
-                <span className="text-sm text-muted-foreground">Base Hourly Pay</span>
-                <span className="text-sm font-medium">
-                  ${estimate.baseHourly.toFixed(2)}
-                  <span className="text-xs text-muted-foreground ml-1">
-                    ({estimate.breakdown.expectedHours}h × ${estimate.breakdown.hourlyRate}/h)
-                  </span>
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b">
-                <span className="text-sm text-muted-foreground">Quality Bonus</span>
+                <span className="text-sm text-muted-foreground">Base Pay</span>
                 <span className="text-sm font-medium">
                   ${estimate.adjustedBonus.toFixed(2)}
                   <span className="text-xs text-muted-foreground ml-1">
@@ -1662,36 +1612,38 @@ function PayCalculatorTab() {
         </Card>
       </div>
 
-      {/* Tier reference table */}
-      {tiers && (
-        <Card className="p-5">
-          <h3 className="font-semibold mb-3">Bedroom Tier Reference</h3>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-xs">Tier</TableHead>
-                <TableHead className="text-xs">Expected Hours</TableHead>
-                <TableHead className="text-xs">Base Hourly Pay</TableHead>
-                <TableHead className="text-xs">Base Bonus</TableHead>
-                <TableHead className="text-xs">Max Bonus (1.5x)</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tiers.map((t) => (
-                <TableRow key={t.tier}>
-                  <TableCell className="text-sm font-medium">{t.label}</TableCell>
-                  <TableCell className="text-sm">{t.expectedHours}h</TableCell>
-                  <TableCell className="text-sm">${t.baseHourlyPay.toFixed(2)}</TableCell>
-                  <TableCell className="text-sm">${t.baseBonus}</TableCell>
+      {/* Fee → base pay reference */}
+      <Card className="p-5">
+        <h3 className="font-semibold mb-3">Cleaning Fee → Base Pay Reference</h3>
+        <p className="text-xs text-muted-foreground mb-3">
+          Base pay per clean = 10% of the customer cleaning fee, rounded up to the nearest $10. Quality multipliers then scale this amount.
+        </p>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="text-xs">Cleaning Fee</TableHead>
+              <TableHead className="text-xs">Base Pay</TableHead>
+              <TableHead className="text-xs">At 1.2x (Gold)</TableHead>
+              <TableHead className="text-xs">At 1.5x (Platinum)</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {[75, 150, 250, 325, 400, 500, 650].map((fee) => {
+              const base = baseBonusPreview(fee);
+              return (
+                <TableRow key={fee}>
+                  <TableCell className="text-sm font-medium">${fee}</TableCell>
+                  <TableCell className="text-sm">${base}</TableCell>
+                  <TableCell className="text-sm">${(base * 1.2).toFixed(2)}</TableCell>
                   <TableCell className="text-sm font-medium text-emerald-600">
-                    ${(t.baseBonus * 1.5).toFixed(2)}
+                    ${(base * 1.5).toFixed(2)}
                   </TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      )}
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Card>
 
       {/* Multiplier reference + Scenario Controls */}
       <ScenarioControls />
