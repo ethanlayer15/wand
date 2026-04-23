@@ -16,7 +16,7 @@ import { getCleaners } from "./compensation";
 import { completedCleans } from "../drizzle/schema";
 import { breezewayTeam } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
-import { getWeekOfMonday } from "./payCalculation";
+import { getPayWeekStart } from "./payCalculation";
 import { sendCleaningReportsForNewCleans } from "./cleaningReports";
 
 interface BreezewayTaskResponse {
@@ -501,7 +501,7 @@ export async function syncCompletedCleans(): Promise<CleanSyncResult> {
           : task.completed_at
           ? new Date(task.completed_at)
           : new Date();
-        const weekOf = getWeekOfMonday(scheduledDate);
+        const weekOf = getPayWeekStart(scheduledDate);
 
         // Determine if this is a paired clean (2 matched cleaners)
         const isPaired = matchedCleanerIds.length >= 2;

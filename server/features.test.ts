@@ -2,7 +2,7 @@
  * Tests for Feature Batch: POD Storage Addresses, Breezeway Clean Sync, Receipt Upload
  */
 import { describe, it, expect, vi } from "vitest";
-import { getWeekOfMonday } from "./payCalculation";
+import { getPayWeekStart } from "./payCalculation";
 
 // ── POD Storage Address Tests ──────────────────────────────────────────
 
@@ -45,16 +45,16 @@ describe("POD Storage Addresses", () => {
 // ── Breezeway Clean Sync Tests ─────────────────────────────────────────
 
 describe("Breezeway Clean Sync Logic", () => {
-  it("getWeekOfMonday correctly groups cleans by week", () => {
-    // All dates in the same week should return the same Monday
-    const mon = getWeekOfMonday(new Date("2026-03-30T12:00:00Z"));
-    const wed = getWeekOfMonday(new Date("2026-04-01T12:00:00Z"));
-    const fri = getWeekOfMonday(new Date("2026-04-03T12:00:00Z"));
-    const sun = getWeekOfMonday(new Date("2026-04-05T12:00:00Z"));
-    expect(mon).toBe("2026-03-30");
-    expect(wed).toBe("2026-03-30");
-    expect(fri).toBe("2026-03-30");
-    expect(sun).toBe("2026-03-30");
+  it("getPayWeekStart correctly groups cleans into Wed→Tue pay periods", () => {
+    // Pay period Wed 2026-04-22 → Tue 2026-04-28
+    const wed = getPayWeekStart(new Date("2026-04-22T12:00:00Z"));
+    const fri = getPayWeekStart(new Date("2026-04-24T12:00:00Z"));
+    const sun = getPayWeekStart(new Date("2026-04-26T12:00:00Z"));
+    const tue = getPayWeekStart(new Date("2026-04-28T12:00:00Z"));
+    expect(wed).toBe("2026-04-22");
+    expect(fri).toBe("2026-04-22");
+    expect(sun).toBe("2026-04-22");
+    expect(tue).toBe("2026-04-22");
   });
 
   it("dedup logic: same breezewayTaskId should not create duplicate", () => {

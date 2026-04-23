@@ -830,7 +830,7 @@ export const completedCleans = mysqlTable("completedCleans", {
   completedDate: timestamp("completedDate"), // when the clean was actually completed
   cleaningFee: decimal("cleaningFee", { precision: 10, scale: 2 }), // the property's cleaning fee at time of clean
   distanceMiles: decimal("distanceMiles", { precision: 6, scale: 2 }), // one-way distance from POD storage
-  weekOf: varchar("weekOf", { length: 10 }), // YYYY-MM-DD of the Monday of the week (for weekly grouping)
+  weekOf: varchar("weekOf", { length: 10 }), // YYYY-MM-DD of the Wednesday that starts the Wed→Tue pay period
   pairedCleanerId: int("pairedCleanerId"), // FK to cleaners.id — if set, this clean was a paired/split clean
   splitRatio: decimal("splitRatio", { precision: 3, scale: 2 }).default("1.00"), // 0.50 for paired, 1.00 for solo
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -849,7 +849,7 @@ export type InsertCompletedClean = typeof completedCleans.$inferInsert;
 export const weeklyPaySnapshots = mysqlTable("weeklyPaySnapshots", {
   id: int("id").autoincrement().primaryKey(),
   cleanerId: int("cleanerId").notNull(), // FK to cleaners.id
-  weekOf: varchar("weekOf", { length: 10 }).notNull(), // YYYY-MM-DD of Monday
+  weekOf: varchar("weekOf", { length: 10 }).notNull(), // YYYY-MM-DD of the Wednesday that starts the Wed→Tue pay period
   // Base pay
   totalCleans: int("totalCleans").default(0),
   totalCleaningFees: decimal("totalCleaningFees", { precision: 10, scale: 2 }).default("0"), // sum of cleaning fees (hidden from cleaner)
@@ -963,7 +963,7 @@ export type InsertReservationSnapshot = typeof reservationSnapshots.$inferInsert
  */
 export const payrollRuns = mysqlTable("payrollRuns", {
   id: int("id").autoincrement().primaryKey(),
-  weekOf: varchar("weekOf", { length: 10 }).notNull(), // YYYY-MM-DD of Monday
+  weekOf: varchar("weekOf", { length: 10 }).notNull(), // YYYY-MM-DD of the Wednesday that starts the Wed→Tue pay period
   status: mysqlEnum("payrollRunStatus", ["draft", "approved", "submitted"]).default("draft").notNull(),
   includesMonthlyReceipts: boolean("includesMonthlyReceipts").default(false).notNull(),
   cleanerCount: int("cleanerCount").default(0).notNull(),

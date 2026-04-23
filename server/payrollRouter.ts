@@ -21,7 +21,7 @@ import {
   approveRun,
   buildCsv,
   generatePayrollRun,
-  getPayPeriodMondayFor,
+  getPriorPayWeekStartFor,
   markSubmitted,
 } from "./payrollRun";
 
@@ -67,14 +67,14 @@ export const payrollRouter = router({
         .object({
           weekOf: z
             .string()
-            .regex(/^\d{4}-\d{2}-\d{2}$/, "weekOf must be YYYY-MM-DD (Monday)")
+            .regex(/^\d{4}-\d{2}-\d{2}$/, "weekOf must be YYYY-MM-DD (Wednesday, pay period start)")
             .optional(),
           includeMonthlyReceipts: z.boolean().optional(),
         })
         .optional()
     )
     .mutation(async ({ input }) => {
-      const weekOf = input?.weekOf ?? getPayPeriodMondayFor();
+      const weekOf = input?.weekOf ?? getPriorPayWeekStartFor();
       const result = await generatePayrollRun(weekOf, {
         includeMonthlyReceipts: input?.includeMonthlyReceipts,
       });

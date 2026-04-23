@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getCleanerByToken, ensureCleanerToken, generateAllMissingTokens, regenerateToken } from "./cleanerTokens";
-import { calculateWeeklyPay, getWeekOfMonday } from "./payCalculation";
+import { calculateWeeklyPay, getPayWeekStart } from "./payCalculation";
 import { getDb } from "./db";
 import {
   cleaners,
@@ -259,7 +259,7 @@ export const cleanerDashboardRouter = router({
       const cleaner = await getCleanerByToken(input.token);
       if (!cleaner) return null;
 
-      const weekOf = input.weekOf ?? getWeekOfMonday(new Date());
+      const weekOf = input.weekOf ?? getPayWeekStart(new Date());
       const breakdown = await calculateWeeklyPay(cleaner.id, weekOf);
       if (!breakdown) return null;
 

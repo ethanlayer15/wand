@@ -3,7 +3,8 @@
  *
  * Workflow:
  *   1. Wednesday 9 AM ET cron (or manual trigger) calls generatePayrollRun(weekOf)
- *      with the prior week's Monday. This calculates pay for every active
+ *      with the Wednesday that starts the prior completed pay period
+ *      (pay periods run Wed → Tue). This calculates pay for every active
  *      cleaner, writes a `payrollRuns` row (status=draft) + one
  *      `payrollRunLines` row per cleaner.
  *   2. Admin reviews in the Payroll UI, edits if needed, clicks Approve →
@@ -42,17 +43,17 @@ import {
 // ── Date helpers ────────────────────────────────────────────────────────
 
 /**
- * Return the Monday (YYYY-MM-DD) of the week prior to `today`.
- * Payroll covers the completed week, generated on Wednesday.
+ * Return the Wednesday (YYYY-MM-DD) that starts the PRIOR completed pay
+ * period. Pay periods run Wed→Tue; the cron fires Wednesday mornings to
+ * generate payroll for the week that just ended Tuesday — i.e. the
+ * Wednesday 7 days before `today`'s Wednesday (or before `today` itself
+ * if `today` is a Wednesday).
  */
-export function getPayPeriodMondayFor(today: Date = new Date()): string {
+export function getPriorPayWeekStartFor(today: Date = new Date()): string {
   const d = new Date(today);
-  // Go back to the most recent Monday...
-  const day = d.getUTCDay(); // 0=Sun
-  const mondayOffset = day === 0 ? 6 : day - 1;
-  d.setUTCDate(d.getUTCDate() - mondayOffset);
-  // ...then back one more week (we pay for the *prior* completed week)
-  d.setUTCDate(d.getUTCDate() - 7);
+  const day = d.getUTCDay(); // 0=Sun ... 3=Wed ... 6=Sat
+  const daysBackToThisWed = (day - 3 + 7) % 7;
+  d.setUTCDate(d.getUTCDate() - daysBackToThisWed - 7);
   return d.toISOString().slice(0, 10);
 }
 
