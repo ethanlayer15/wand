@@ -1266,3 +1266,165 @@ export const escalationGroupDms = mysqlTable("escalationGroupDms", {
 
 export type EscalationGroupDm = typeof escalationGroupDms.$inferSelect;
 export type InsertEscalationGroupDm = typeof escalationGroupDms.$inferInsert;
+
+/**
+ * Onboarding — property-onboarding projects that flow through staged handoffs
+ * (Ethan kickoff → Seth → Yosimar → Chloe → Ethan QA). Lives in a dedicated
+ * "Onboarding" section in the UI, separate from the maintenance task board.
+ *
+ * Four templates (Airbnb-existing, Airbnb-new, rental arbitrage, combo
+ * listings) declare per-stage default checklists + fields; per-project
+ * stage instances hold the actual checklist state and any ad-hoc additions
+ * (every property is unique, so each owner can extend their own stage).
+ *
+ * Stages can run in parallel — "notify next" hands off to the next owner
+ * without closing the current stage (often we're waiting on photos / cleaner
+ * / etc. while the next person can start their part).
+ */
+
+/**
+ * Onboarding templates. v1 ships with 4 rows seeded by migration; future
+ * UI authoring can mutate these. `stagesConfig` declares the ordered stages
+ * with their default checklists + fields; per-project additions are stored
+ * on `onboardingStageInstances` (no schema migration needed).
+ */
+type OnboardingFieldDef = {
+  key: string;
+  label: string;
+  type: "text" | "longtext" | "number" | "money" | "url" | "boolean" | "date";
+  placeholder?: string;
+};
+
+type OnboardingChecklistItemDef = {
+  id: string;
+  label: string;
+  hint?: string;
+};
+
+type OnboardingStageDef = {
+  key: string; // stable identifier, e.g. "kickoff", "seth_listing"
+  label: string; // display label, e.g. "Seth — Listing setup"
+  ownerRole?: "ethan" | "seth" | "yosimar" | "chloe" | string;
+  defaultChecklist: OnboardingChecklistItemDef[];
+  defaultFields: OnboardingFieldDef[];
+};
+
+export const onboardingTemplates = mysqlTable("onboardingTemplates", {
+  id: int("id").autoincrement().primaryKey(),
+  slug: varchar("slug", { length: 64 }).notNull().unique(),
+  name: varchar("name", { length: 128 }).notNull(),
+  description: text("description"),
+  // Fields prompted at project creation (Ethan's kickoff fields)
+  kickoffFieldSchema: json("kickoffFieldSchema").$type<OnboardingFieldDef[]>().notNull(),
+  // Ordered stages with default checklist + fields per stage
+  stagesConfig: json("stagesConfig").$type<OnboardingStageDef[]>().notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type OnboardingTemplate = typeof onboardingTemplates.$inferSelect;
+export type InsertOnboardingTemplate = typeof onboardingTemplates.$inferInsert;
+
+/**
+ * One onboarding project = one property being onboarded.
+ *
+ * `currentStageIndex` is the *latest active* stage (used for board column
+ * placement). With concurrent stages allowed, the actual per-stage state
+ * lives on onboardingStageInstances.
+ */
+export const onboardingProjects = mysqlTable("onboardingProjects", {
+  id: int("id").autoincrement().primaryKey(),
+  templateId: int("templateId").notNull(), // FK → onboardingTemplates.id
+  propertyName: varchar("propertyName", { length: 256 }).notNull(),
+  address: text("address"),
+  listingId: int("listingId"), // FK → listings.id (nullable until Seth links it)
+  currentStageIndex: int("currentStageIndex").default(0).notNull(),
+  status: mysqlEnum("status", ["active", "blocked", "done", "cancelled"])
+    .default("active")
+    .notNull(),
+  // Ethan's kickoff input (matches templates.kickoffFieldSchema by `key`)
+  kickoffData: json("kickoffData").$type<Record<string, unknown>>(),
+  createdBy: int("createdBy").notNull(), // FK → users.id
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type OnboardingProject = typeof onboardingProjects.$inferSelect;
+export type InsertOnboardingProject = typeof onboardingProjects.$inferInsert;
+
+/**
+ * Per-stage instance for a project. Created upfront (one row per stage in
+ * the template's stagesConfig) when the project is created. `state` advances
+ * as owners work; multiple instances can be `in_progress` at once.
+ *
+ * `checklistState` shape:
+ *   {
+ *     "<itemId>": { done: boolean, by?: number, at?: string, note?: string },
+ *     "<customItemId>": { ...above, custom: true, label: string, addedBy: number }
+ *   }
+ *
+ * `stageData` shape:
+ *   {
+ *     "<fieldKey>": <value>,
+ *     "_custom": [ { key, label, type, value, addedBy } ]
+ *   }
+ */
+export const onboardingStageInstances = mysqlTable(
+  "onboardingStageInstances",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    projectId: int("projectId").notNull(), // FK → onboardingProjects.id
+    stageIndex: int("stageIndex").notNull(),
+    stageKey: varchar("stageKey", { length: 64 }).notNull(),
+    ownerUserId: int("ownerUserId"), // FK → users.id; null until assigned
+    state: mysqlEnum("state", ["not_started", "in_progress", "done"])
+      .default("not_started")
+      .notNull(),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    checklistState: json("checklistState").$type<Record<string, unknown>>(),
+    stageData: json("stageData").$type<Record<string, unknown>>(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uniqProjectStage: uniqueIndex("uniq_onboarding_project_stage").on(
+      t.projectId,
+      t.stageIndex,
+    ),
+  }),
+);
+
+export type OnboardingStageInstance = typeof onboardingStageInstances.$inferSelect;
+export type InsertOnboardingStageInstance = typeof onboardingStageInstances.$inferInsert;
+
+/**
+ * Audit trail for an onboarding project. Drives the activity panel + the
+ * agent learning loop later. Every meaningful action writes one row.
+ */
+export const onboardingEvents = mysqlTable("onboardingEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: int("projectId").notNull(), // FK → onboardingProjects.id
+  stageInstanceId: int("stageInstanceId"), // FK → onboardingStageInstances.id (nullable)
+  eventType: mysqlEnum("eventType", [
+    "project_created",
+    "stage_started",
+    "stage_completed",
+    "stage_reopened",
+    "notify_next",
+    "reminder_sent",
+    "comment_added",
+    "field_updated",
+    "checklist_item_added",
+    "checklist_item_toggled",
+    "owner_reassigned",
+    "status_changed",
+  ]).notNull(),
+  actorUserId: int("actorUserId"), // FK → users.id; null for system actions (cron, agent)
+  data: json("data").$type<Record<string, unknown>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type OnboardingEvent = typeof onboardingEvents.$inferSelect;
+export type InsertOnboardingEvent = typeof onboardingEvents.$inferInsert;

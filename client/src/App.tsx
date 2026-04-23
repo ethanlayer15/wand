@@ -20,6 +20,8 @@ import NotFound from "@/pages/NotFound";
 import CleanerDashboard from "@/pages/CleanerDashboard";
 import OpsInbox from "@/pages/OpsInbox";
 import OnCall from "@/pages/OnCall";
+import OnboardingList from "@/pages/OnboardingList";
+import OnboardingProject from "@/pages/OnboardingProject";
 import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -135,6 +137,10 @@ function Router() {
               </Route>
               <Route path="/on-call">
                 <RequireRole minRole="manager"><OnCall /></RequireRole>
+              </Route>
+              <Route path="/onboarding" component={OnboardingList} />
+              <Route path="/onboarding/:id">
+                {(params: { id: string }) => <OnboardingProject id={Number(params.id)} />}
               </Route>
               <Route path="/settings">
                 <RequireRole minRole="admin"><Settings /></RequireRole>
