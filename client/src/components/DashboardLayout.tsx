@@ -30,6 +30,7 @@ import {
   Building2,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   DollarSign,
   Hexagon,
   LayoutDashboard,
@@ -94,6 +95,7 @@ export type NavItem = {
 
 export const mainNavItems: NavItem[] = [
   { icon: ListTodo, label: "Tasks", path: "/" },
+  { icon: ClipboardList, label: "Onboarding", path: "/onboarding" },
   { icon: BarChart2, label: "Analyze", path: "/analyze", minRole: "manager" },
   {
     icon: Building2,
