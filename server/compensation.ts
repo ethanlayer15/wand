@@ -126,6 +126,11 @@ export function findResponsibleClean(
 ): CleanForMatching | null {
   if (cleansForListing.length === 0) return null;
   const arrivalDay = startOfDayUtc(arrivalDate);
+  const todayDay = startOfDayUtc(new Date());
+  // Defense against bad review data: a review can't be about a stay that
+  // hasn't happened yet. Seen in the wild when Hostaway re-links a review
+  // to a newer reservation and the arrivalDate gets overwritten.
+  if (arrivalDay > todayDay) return null;
 
   let best: CleanForMatching | null = null;
   let bestDayDelta = Infinity;
