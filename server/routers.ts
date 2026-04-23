@@ -371,6 +371,53 @@ export const appRouter = router({
           .where(eq(listingsTable.id, input.listingId));
         return { ok: true };
       }),
+
+    /**
+     * List listings that still need onboarding config (pod, cleaning fee,
+     * bedroom tier). New Hostaway-synced properties land here until an
+     * admin runs them through `completeOnboarding`.
+     */
+    pendingOnboarding: managerProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { listings: listingsTable } = await import("../drizzle/schema");
+      return db
+        .select()
+        .from(listingsTable)
+        .where(eq(listingsTable.onboardingStatus, "pending"))
+        .orderBy(listingsTable.createdAt);
+    }),
+
+    /**
+     * Save the three onboarding fields and flip the listing to
+     * onboardingStatus='onboarded' so it drops out of the queue. All three
+     * fields are required to complete onboarding — the UI disables the
+     * button until they're set.
+     */
+    completeOnboarding: managerProcedure
+      .input(
+        z.object({
+          listingId: z.number(),
+          podId: z.number(),
+          cleaningFeeCharge: z.number().min(0),
+          bedroomTier: z.number().int().min(1).max(5),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { listings: listingsTable } = await import("../drizzle/schema");
+        await db
+          .update(listingsTable)
+          .set({
+            podId: input.podId,
+            cleaningFeeCharge: String(input.cleaningFeeCharge),
+            bedroomTier: input.bedroomTier,
+            onboardingStatus: "onboarded",
+          })
+          .where(eq(listingsTable.id, input.listingId));
+        return { ok: true };
+      }),
   }),
 
   // Tasks

@@ -268,6 +268,34 @@ export async function getDb() {
       } catch (e: any) {
         console.warn("[Database] Review channelId backfill skipped:", e.message);
       }
+
+      // ── Migration + backfill: listings.onboardingStatus ────────────────
+      // New properties from the Hostaway sync land in "pending" so they
+      // show up in the Onboarding queue until an admin assigns pod +
+      // cleaning fee + bedroom tier. Existing properties are already
+      // configured, so mark them all "onboarded" the first time this
+      // column appears. Idempotent via Duplicate-column guard.
+      try {
+        await _pool
+          .promise()
+          .query(
+            `ALTER TABLE listings
+               ADD COLUMN onboardingStatus ENUM('pending','onboarded') NOT NULL DEFAULT 'pending'`,
+          );
+        console.log("[Database] Added listings.onboardingStatus column");
+        // Column was just created → backfill every existing row to "onboarded"
+        const [r] = await _pool
+          .promise()
+          .query(`UPDATE listings SET onboardingStatus = 'onboarded'`);
+        const affected = (r as any)?.affectedRows ?? 0;
+        console.log(
+          `[Database] Backfilled ${affected} existing listings to onboardingStatus='onboarded'`,
+        );
+      } catch (e: any) {
+        if (!e.message?.includes("Duplicate column") && !e.message?.includes("already exists")) {
+          console.warn("[Database] onboardingStatus migration skipped:", e.message);
+        }
+      }
     } catch (error) {
       console.warn("[Database] Failed to create pool:", error);
       _db = null;
