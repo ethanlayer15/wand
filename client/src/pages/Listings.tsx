@@ -1040,22 +1040,13 @@ function AddManualListingForm({ onClose }: { onClose: () => void }) {
 }
 
 // ── Onboarding tab ────────────────────────────────────────────────────
-// New Hostaway-synced properties land here until an admin sets pod,
-// cleaning fee, and bedroom tier — then "Mark Onboarded" flips the
-// listing's onboardingStatus and drops it out of the queue.
-
-const BEDROOM_TIER_OPTIONS = [
-  { value: 1, label: "1 BR / Studio" },
-  { value: 2, label: "2 BR" },
-  { value: 3, label: "3 BR" },
-  { value: 4, label: "4 BR" },
-  { value: 5, label: "5+ BR" },
-] as const;
+// New Hostaway-synced properties land here until an admin sets pod and
+// cleaning fee — then "Mark Onboarded" flips the listing's
+// onboardingStatus and drops it out of the queue.
 
 type OnboardingDraft = {
   podId: number | null;
   cleaningFeeCharge: string;
-  bedroomTier: number | null;
 };
 
 function OnboardingTable({ listings }: { listings: any[] }) {
@@ -1075,7 +1066,6 @@ function OnboardingTable({ listings }: { listings: any[] }) {
     drafts[l.id] ?? {
       podId: l.podId ?? null,
       cleaningFeeCharge: l.cleaningFeeCharge != null ? String(l.cleaningFeeCharge) : "",
-      bedroomTier: l.bedroomTier ?? null,
     };
 
   const updateDraft = (id: number, patch: Partial<OnboardingDraft>) =>
@@ -1086,7 +1076,7 @@ function OnboardingTable({ listings }: { listings: any[] }) {
 
   const isComplete = (d: OnboardingDraft) => {
     const fee = Number(d.cleaningFeeCharge);
-    return d.podId != null && d.bedroomTier != null && d.cleaningFeeCharge !== "" && !Number.isNaN(fee) && fee >= 0;
+    return d.podId != null && d.cleaningFeeCharge !== "" && !Number.isNaN(fee) && fee >= 0;
   };
 
   if (listings.length === 0) {
@@ -1106,7 +1096,6 @@ function OnboardingTable({ listings }: { listings: any[] }) {
             <th className="text-left px-3 py-2 font-medium">Location</th>
             <th className="text-left px-3 py-2 font-medium w-40">Pod</th>
             <th className="text-left px-3 py-2 font-medium w-32">Cleaning Fee</th>
-            <th className="text-left px-3 py-2 font-medium w-36">Bedroom Tier</th>
             <th className="text-right px-3 py-2 font-medium w-40"></th>
           </tr>
         </thead>
@@ -1154,23 +1143,6 @@ function OnboardingTable({ listings }: { listings: any[] }) {
                     onChange={(e) => updateDraft(l.id, { cleaningFeeCharge: e.target.value })}
                   />
                 </td>
-                <td className="px-3 py-2 align-middle">
-                  <Select
-                    value={d.bedroomTier != null ? String(d.bedroomTier) : ""}
-                    onValueChange={(v) => updateDraft(l.id, { bedroomTier: Number(v) })}
-                  >
-                    <SelectTrigger className="h-8 text-sm">
-                      <SelectValue placeholder="Tier" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {BEDROOM_TIER_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={String(o.value)}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </td>
                 <td className="px-3 py-2 align-middle text-right">
                   <Button
                     size="sm"
@@ -1180,7 +1152,6 @@ function OnboardingTable({ listings }: { listings: any[] }) {
                         listingId: l.id,
                         podId: d.podId!,
                         cleaningFeeCharge: Number(d.cleaningFeeCharge),
-                        bedroomTier: d.bedroomTier!,
                       })
                     }
                   >

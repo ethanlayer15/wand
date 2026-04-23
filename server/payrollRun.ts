@@ -32,7 +32,12 @@ import {
   type PayrollRun,
   type PayrollRunLine,
 } from "../drizzle/schema";
-import { calculateAllWeeklyPay, saveWeeklyPaySnapshot, type WeeklyPayBreakdown } from "./payCalculation";
+import {
+  assertAllCleansOnboarded,
+  calculateAllWeeklyPay,
+  saveWeeklyPaySnapshot,
+  type WeeklyPayBreakdown,
+} from "./payCalculation";
 
 // ── Date helpers ────────────────────────────────────────────────────────
 
@@ -119,6 +124,9 @@ export async function generatePayrollRun(
       totalGrossPay: Number(existing.totalGrossPay),
     };
   }
+
+  // 0. Block if any scorable clean in the period is on an un-onboarded listing.
+  await assertAllCleansOnboarded(weekOf);
 
   // 1. Calculate pay for every active cleaner, persist snapshots
   const breakdowns = await calculateAllWeeklyPay(weekOf);

@@ -53,7 +53,8 @@ export const listings = mysqlTable("listings", {
   avgRating: decimal("avgRating", { precision: 3, scale: 2 }),
   reviewCount: int("reviewCount").default(0),
   // ── Compensation fields ──
-  bedroomTier: int("bedroomTier"), // 1-5 mapping to 1BR through 5BR+
+  // Replaced the old bedroomTier field in 2026-04. Base pay per clean is
+  // now 10% of cleaningFeeCharge rounded up to the nearest $10.
   distanceFromStorage: decimal("distanceFromStorage", { precision: 6, scale: 2 }), // one-way miles
   cleaningFeeCharge: decimal("cleaningFeeCharge", { precision: 10, scale: 2 }), // what 5STR charges the customer
   podId: int("podId"), // FK to pods.id — which geographic pod this property belongs to

@@ -25,19 +25,22 @@ import {
   Cleaner,
 } from "../drizzle/schema";
 
-// ── Tier configuration ──────────────────────────────────────────────
+// ── Pay constants ───────────────────────────────────────────────────
 
-export const BEDROOM_TIERS = [
-  { tier: 1, label: "1 Bedroom / Studio", expectedHours: 1.35, baseBonus: 10 },
-  { tier: 2, label: "2 Bedrooms", expectedHours: 1.80, baseBonus: 18 },
-  { tier: 3, label: "3 Bedrooms", expectedHours: 2.48, baseBonus: 26 },
-  { tier: 4, label: "4 Bedrooms", expectedHours: 3.15, baseBonus: 36 },
-  { tier: 5, label: "5+ Bedrooms", expectedHours: 4.50, baseBonus: 50 },
-] as const;
-
-export const BASE_HOURLY_RATE = 14.0;
 export const IRS_MILEAGE_RATE = 0.725; // 2026 IRS standard rate
 export const DOCKING_PENALTY = 10.0;
+
+// Cleaner base pay per clean = 10% of the customer's cleaning fee,
+// rounded UP to the nearest $10. A non-zero fee therefore always produces
+// at least $10 of base pay. Replaced the bedroom-tier table as of
+// 2026-04-22 (pay period starting Wed 4/22–Tue 4/28).
+export function baseBonusFromCleaningFee(
+  cleaningFee: number | string | null | undefined,
+): number {
+  const fee = typeof cleaningFee === "string" ? Number(cleaningFee) : cleaningFee ?? 0;
+  if (!Number.isFinite(fee) || fee <= 0) return 0;
+  return Math.ceil((fee * 0.1) / 10) * 10;
+}
 
 // ── Multiplier logic ────────────────────────────────────────────────
 
@@ -510,7 +513,6 @@ export async function getCleanerScoreHistory(cleanerId: number, limit = 30) {
 export async function updatePropertyCompensationFields(
   listingId: number,
   data: {
-    bedroomTier?: number | null;
     distanceFromStorage?: string | null;
     cleaningFeeCharge?: string | null;
   }
@@ -520,7 +522,6 @@ export async function updatePropertyCompensationFields(
 
   const { listings } = await import("../drizzle/schema");
   const updateData: Record<string, any> = {};
-  if (data.bedroomTier !== undefined) updateData.bedroomTier = data.bedroomTier;
   if (data.distanceFromStorage !== undefined) updateData.distanceFromStorage = data.distanceFromStorage;
   if (data.cleaningFeeCharge !== undefined) updateData.cleaningFeeCharge = data.cleaningFeeCharge;
 
@@ -532,7 +533,6 @@ export async function updatePropertyCompensationFields(
 export async function bulkUpdatePropertyCompensation(
   updates: Array<{
     listingId: number;
-    bedroomTier?: number | null;
     distanceFromStorage?: string | null;
     cleaningFeeCharge?: string | null;
   }>
@@ -566,13 +566,11 @@ export function calculateMileageReimbursement(
 // ── Bonus calculation ───────────────────────────────────────────────
 
 export function calculateCleanBonus(
-  bedroomTier: number,
-  multiplier: number
+  cleaningFee: number | string | null | undefined,
+  multiplier: number,
 ): { baseBonus: number; adjustedBonus: number; dockPenalty: number } {
-  const tier = BEDROOM_TIERS.find((t) => t.tier === bedroomTier) ?? BEDROOM_TIERS[0];
-  const baseBonus = tier.baseBonus;
+  const baseBonus = baseBonusFromCleaningFee(cleaningFee);
   const adjustedBonus = Number((baseBonus * multiplier).toFixed(2));
   const dockPenalty = multiplier === 0 ? DOCKING_PENALTY : 0;
-
   return { baseBonus, adjustedBonus, dockPenalty };
 }

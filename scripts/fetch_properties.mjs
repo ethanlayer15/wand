@@ -21,7 +21,7 @@ if (!DATABASE_URL) {
 const conn = await mysql.createConnection(DATABASE_URL);
 
 const [rows] = await conn.execute(
-  `SELECT id, name, internalName, city, state, cleaningFeeCharge, bedroomTier, podId
+  `SELECT id, name, internalName, city, state, cleaningFeeCharge, podId
    FROM listings
    WHERE status = 'active'
    ORDER BY COALESCE(internalName, name)`
