@@ -13,7 +13,7 @@
 import { recalculateAllRollingScores } from "./compensation";
 import { checkAndNotifyUnassignedSdts } from "./sdtNotifier";
 import { checkAndNotifyLastMinuteChanges } from "./lastMinuteNotifier";
-import { generatePayrollRun, getPayPeriodMondayFor } from "./payrollRun";
+import { generatePayrollRun, getPriorPayWeekStartFor } from "./payrollRun";
 import { startGuestMessagePipelineJob } from "./taskCreator";
 import { startReviewPipelineJob } from "./reviewPipeline";
 import { pollBreezewayTasks } from "./breezewayTaskSync";
@@ -164,7 +164,7 @@ async function runCompensationRecalc(): Promise<void> {
 
 async function runWeeklyPayrollGeneration(): Promise<void> {
   try {
-    const weekOf = getPayPeriodMondayFor();
+    const weekOf = getPriorPayWeekStartFor();
     console.log(`[Cron] Generating weekly payroll draft for week ${weekOf}...`);
     const result = await generatePayrollRun(weekOf);
     console.log(

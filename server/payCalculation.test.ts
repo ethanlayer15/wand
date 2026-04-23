@@ -1,9 +1,9 @@
 /**
  * Tests for the Pay Calculation Engine
- * Covers: getWeekOfMonday, volume tier logic, pair/split logic
+ * Covers: getPayWeekStart, volume tier logic, pair/split logic
  */
 import { describe, it, expect } from "vitest";
-import { getWeekOfMonday, getCurrentWeekMonday } from "./payCalculation";
+import { getPayWeekStart, getCurrentPayWeekStart } from "./payCalculation";
 import {
   getVolumeTier,
   DEFAULT_VOLUME_TIERS,
@@ -11,40 +11,35 @@ import {
   DEFAULT_REIMBURSEMENT_TIERS,
 } from "../shared/compensationConfig";
 
-// ── getWeekOfMonday tests ────────────────────────────────────────────
+// ── getPayWeekStart tests (Wednesday anchor) ─────────────────────────
 
-describe("getWeekOfMonday", () => {
-  it("returns Monday for a Monday input", () => {
-    // 2026-03-30 is a Monday
-    const result = getWeekOfMonday(new Date("2026-03-30T12:00:00Z"));
-    expect(result).toBe("2026-03-30");
+describe("getPayWeekStart", () => {
+  it("returns the Wednesday itself for a Wednesday input", () => {
+    // 2026-04-22 is a Wednesday
+    const result = getPayWeekStart(new Date("2026-04-22T12:00:00Z"));
+    expect(result).toBe("2026-04-22");
   });
 
-  it("returns the preceding Monday for a Wednesday", () => {
-    // 2026-04-01 is a Wednesday → Monday is 2026-03-30
-    const result = getWeekOfMonday(new Date("2026-04-01T12:00:00Z"));
-    expect(result).toBe("2026-03-30");
+  it("returns prior Wednesday for a Tuesday (end of period)", () => {
+    // 2026-04-28 is a Tuesday → pay period started 2026-04-22
+    const result = getPayWeekStart(new Date("2026-04-28T12:00:00Z"));
+    expect(result).toBe("2026-04-22");
   });
 
-  it("returns the preceding Monday for a Sunday", () => {
-    // 2026-04-05 is a Sunday → Monday is 2026-03-30
-    const result = getWeekOfMonday(new Date("2026-04-05T12:00:00Z"));
-    expect(result).toBe("2026-03-30");
+  it("returns prior Wednesday for a Monday", () => {
+    // 2026-04-27 is a Monday → pay period started 2026-04-22
+    const result = getPayWeekStart(new Date("2026-04-27T12:00:00Z"));
+    expect(result).toBe("2026-04-22");
   });
 
-  it("returns the preceding Monday for a Friday", () => {
-    // 2026-04-03 is a Friday → Monday is 2026-03-30
-    const result = getWeekOfMonday(new Date("2026-04-03T12:00:00Z"));
-    expect(result).toBe("2026-03-30");
+  it("returns prior Wednesday for a Sunday", () => {
+    // 2026-04-26 is a Sunday → pay period started 2026-04-22
+    const result = getPayWeekStart(new Date("2026-04-26T12:00:00Z"));
+    expect(result).toBe("2026-04-22");
   });
 
-  it("returns a valid YYYY-MM-DD string", () => {
-    const result = getWeekOfMonday(new Date("2026-04-04T00:00:00Z"));
-    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  });
-
-  it("getCurrentWeekMonday returns a valid YYYY-MM-DD string", () => {
-    const result = getCurrentWeekMonday();
+  it("getCurrentPayWeekStart returns a valid YYYY-MM-DD string", () => {
+    const result = getCurrentPayWeekStart();
     expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

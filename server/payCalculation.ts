@@ -37,21 +37,26 @@ import { baseBonusFromCleaningFee } from "./compensation";
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /**
- * Get the Monday of the week for a given date (ISO week: Mon-Sun).
+ * Pay period = Wednesday through the following Tuesday. Returns the
+ * Wednesday (YYYY-MM-DD) of the pay period containing `date`. If `date`
+ * is a Wednesday the result is the same date; earlier in the week (Mon,
+ * Tue) it steps BACK to the prior Wednesday; later (Thu–Sun) it steps
+ * back to the week's Wednesday.
  */
-export function getWeekOfMonday(date: Date): string {
+export function getPayWeekStart(date: Date): string {
   const d = new Date(date);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Sunday
-  d.setDate(diff);
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const day = d.getUTCDay(); // 0=Sun ... 3=Wed ... 6=Sat
+  // How many days back to the Wednesday that starts this pay period.
+  const daysBack = (day - 3 + 7) % 7;
+  d.setUTCDate(d.getUTCDate() - daysBack);
+  return d.toISOString().slice(0, 10);
 }
 
 /**
- * Get the current week's Monday.
+ * Wednesday (YYYY-MM-DD) of the pay period that contains today.
  */
-export function getCurrentWeekMonday(): string {
-  return getWeekOfMonday(new Date());
+export function getCurrentPayWeekStart(): string {
+  return getPayWeekStart(new Date());
 }
 
 // ── Weekly Pay Calculation ───────────────────────────────────────────

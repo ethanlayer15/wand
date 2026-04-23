@@ -9,7 +9,7 @@ import { sendEmail } from "./gmail";
 import { getDb } from "./db";
 import { cleaners } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
-import { calculateWeeklyPay, getWeekOfMonday, type WeeklyPayBreakdown } from "./payCalculation";
+import { calculateWeeklyPay, getPayWeekStart, type WeeklyPayBreakdown } from "./payCalculation";
 import { getCleanerByToken } from "./cleanerTokens";
 
 // ── Email Templates ─────────────────────────────────────────────────
@@ -252,7 +252,7 @@ export async function sendWeeklyPayReport(
   if (!cleaner.email) return { sent: false, reason: "No email address" };
   if (!cleaner.dashboardToken) return { sent: false, reason: "No dashboard token" };
 
-  const targetWeek = weekOf ?? getWeekOfMonday(new Date());
+  const targetWeek = weekOf ?? getPayWeekStart(new Date());
   const breakdown = await calculateWeeklyPay(cleaner.id, targetWeek);
   if (!breakdown) return { sent: false, reason: "Could not calculate pay" };
 
