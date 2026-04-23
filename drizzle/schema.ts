@@ -59,6 +59,12 @@ export const listings = mysqlTable("listings", {
   podId: int("podId"), // FK to pods.id — which geographic pod this property belongs to
   cleaningReportsEnabled: boolean("cleaningReportsEnabled").default(false), // toggle SMS/Slack cleaning reports per property
   cleaningReportSlackWebhook: text("cleaningReportSlackWebhook"), // per-property Slack incoming webhook for cleaning reports
+  // New properties land in "pending" until an admin assigns pod + cleaning fee
+  // + bedroom tier, then flips to "onboarded". Existing properties are
+  // backfilled to "onboarded" on the deploy that adds this column.
+  onboardingStatus: mysqlEnum("onboardingStatus", ["pending", "onboarded"])
+    .default("pending")
+    .notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

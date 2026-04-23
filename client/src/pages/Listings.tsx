@@ -1039,8 +1039,166 @@ function AddManualListingForm({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── Onboarding tab ────────────────────────────────────────────────────
+// New Hostaway-synced properties land here until an admin sets pod,
+// cleaning fee, and bedroom tier — then "Mark Onboarded" flips the
+// listing's onboardingStatus and drops it out of the queue.
+
+const BEDROOM_TIER_OPTIONS = [
+  { value: 1, label: "1 BR / Studio" },
+  { value: 2, label: "2 BR" },
+  { value: 3, label: "3 BR" },
+  { value: 4, label: "4 BR" },
+  { value: 5, label: "5+ BR" },
+] as const;
+
+type OnboardingDraft = {
+  podId: number | null;
+  cleaningFeeCharge: string;
+  bedroomTier: number | null;
+};
+
+function OnboardingTable({ listings }: { listings: any[] }) {
+  const utils = trpc.useUtils();
+  const { data: pods = [] } = trpc.pods.list.useQuery();
+  const completeMutation = trpc.listings.completeOnboarding.useMutation({
+    onSuccess: () => {
+      toast.success("Property onboarded");
+      utils.listings.pendingOnboarding.invalidate();
+      utils.listings.list.invalidate();
+    },
+    onError: (e) => toast.error(`Onboarding failed: ${e.message}`),
+  });
+  const [drafts, setDrafts] = useState<Record<number, OnboardingDraft>>({});
+
+  const draftFor = (l: any): OnboardingDraft =>
+    drafts[l.id] ?? {
+      podId: l.podId ?? null,
+      cleaningFeeCharge: l.cleaningFeeCharge != null ? String(l.cleaningFeeCharge) : "",
+      bedroomTier: l.bedroomTier ?? null,
+    };
+
+  const updateDraft = (id: number, patch: Partial<OnboardingDraft>) =>
+    setDrafts((prev) => ({
+      ...prev,
+      [id]: { ...draftFor({ id }), ...patch } as OnboardingDraft,
+    }));
+
+  const isComplete = (d: OnboardingDraft) => {
+    const fee = Number(d.cleaningFeeCharge);
+    return d.podId != null && d.bedroomTier != null && d.cleaningFeeCharge !== "" && !Number.isNaN(fee) && fee >= 0;
+  };
+
+  if (listings.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-8 text-center">
+        No properties awaiting onboarding. New Hostaway properties will appear here automatically.
+      </p>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/50 text-xs text-muted-foreground">
+          <tr>
+            <th className="text-left px-3 py-2 font-medium">Property</th>
+            <th className="text-left px-3 py-2 font-medium">Location</th>
+            <th className="text-left px-3 py-2 font-medium w-40">Pod</th>
+            <th className="text-left px-3 py-2 font-medium w-32">Cleaning Fee</th>
+            <th className="text-left px-3 py-2 font-medium w-36">Bedroom Tier</th>
+            <th className="text-right px-3 py-2 font-medium w-40"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {listings.map((l) => {
+            const d = draftFor(l);
+            const ready = isComplete(d);
+            const saving = completeMutation.isPending && completeMutation.variables?.listingId === l.id;
+            return (
+              <tr key={l.id} className="border-t">
+                <td className="px-3 py-2 align-middle">
+                  <div className="font-medium">{l.internalName || l.name}</div>
+                  {l.internalName && l.name && l.internalName !== l.name && (
+                    <div className="text-xs text-muted-foreground truncate">{l.name}</div>
+                  )}
+                </td>
+                <td className="px-3 py-2 align-middle text-xs text-muted-foreground">
+                  {[l.city, l.state].filter(Boolean).join(", ") || "—"}
+                </td>
+                <td className="px-3 py-2 align-middle">
+                  <Select
+                    value={d.podId != null ? String(d.podId) : ""}
+                    onValueChange={(v) => updateDraft(l.id, { podId: Number(v) })}
+                  >
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue placeholder="Pick pod" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {pods.map((p: any) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </td>
+                <td className="px-3 py-2 align-middle">
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="h-8 text-sm"
+                    placeholder="$"
+                    value={d.cleaningFeeCharge}
+                    onChange={(e) => updateDraft(l.id, { cleaningFeeCharge: e.target.value })}
+                  />
+                </td>
+                <td className="px-3 py-2 align-middle">
+                  <Select
+                    value={d.bedroomTier != null ? String(d.bedroomTier) : ""}
+                    onValueChange={(v) => updateDraft(l.id, { bedroomTier: Number(v) })}
+                  >
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue placeholder="Tier" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {BEDROOM_TIER_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={String(o.value)}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </td>
+                <td className="px-3 py-2 align-middle text-right">
+                  <Button
+                    size="sm"
+                    disabled={!ready || saving}
+                    onClick={() =>
+                      completeMutation.mutate({
+                        listingId: l.id,
+                        podId: d.podId!,
+                        cleaningFeeCharge: Number(d.cleaningFeeCharge),
+                        bedroomTier: d.bedroomTier!,
+                      })
+                    }
+                  >
+                    {saving ? "Saving…" : "Mark Onboarded"}
+                  </Button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function Listings() {
   const { data: listings, isLoading } = trpc.listings.list.useQuery();
+  const { data: pendingOnboarding = [] } = trpc.listings.pendingOnboarding.useQuery();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedListing, setSelectedListing] = useState<ListingType | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -1085,10 +1243,13 @@ export default function Listings() {
         </div>
       </div>
 
-      <Tabs defaultValue="hostaway">
+      <Tabs defaultValue={pendingOnboarding.length > 0 ? "onboarding" : "hostaway"}>
         <TabsList>
           <TabsTrigger value="hostaway">Hostaway ({hostawayListings.length})</TabsTrigger>
           <TabsTrigger value="5str">5STR Only ({manualListings.length})</TabsTrigger>
+          <TabsTrigger value="onboarding">
+            Onboarding{pendingOnboarding.length > 0 ? ` (${pendingOnboarding.length})` : ""}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="hostaway" className="mt-4">
@@ -1103,6 +1264,10 @@ export default function Listings() {
           </div>
           {showAddForm && <AddManualListingForm onClose={() => setShowAddForm(false)} />}
           <ListingGrid listings={filterBySearch(manualListings)} isLoading={isLoading} onSelect={selectListing} />
+        </TabsContent>
+
+        <TabsContent value="onboarding" className="mt-4">
+          <OnboardingTable listings={pendingOnboarding} />
         </TabsContent>
       </Tabs>
 
