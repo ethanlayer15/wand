@@ -235,6 +235,39 @@ export async function getDb() {
       } catch (e: any) {
         console.warn("[Database] Review source backfill skipped:", e.message);
       }
+
+      // ── Backfill: re-map historical reviews by channelId ──────────────
+      // Reviews synced under older sync code that didn't recognize all
+      // channel IDs got stuck with source='direct'. Re-apply the current
+      // channelId → source mapping to any row whose source no longer
+      // matches its channelId. 2002 intentionally excluded — meaning
+      // unclear (could be direct or a legacy variant). Idempotent.
+      try {
+        const channelMappings: Array<{ source: string; channelIds: number[] }> = [
+          { source: "airbnb",  channelIds: [2005, 2018] },
+          { source: "vrbo",    channelIds: [2004] },
+          { source: "booking", channelIds: [2003] },
+        ];
+        for (const { source, channelIds } of channelMappings) {
+          const placeholders = channelIds.map(() => "?").join(",");
+          const [r] = await _pool
+            .promise()
+            .query(
+              `UPDATE reviews
+                  SET source = ?
+                WHERE channelId IN (${placeholders}) AND source <> ?`,
+              [source, ...channelIds, source],
+            );
+          const affected = (r as any)?.affectedRows ?? 0;
+          if (affected > 0) {
+            console.log(
+              `[Database] Backfilled source=${source} for ${affected} review(s) (channelId in ${channelIds.join(",")})`,
+            );
+          }
+        }
+      } catch (e: any) {
+        console.warn("[Database] Review channelId backfill skipped:", e.message);
+      }
     } catch (error) {
       console.warn("[Database] Failed to create pool:", error);
       _db = null;
