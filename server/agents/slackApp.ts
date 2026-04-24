@@ -139,10 +139,11 @@ async function fetchSlackMessage(
 }
 
 /**
- * Reactions that trigger the propose-a-task flow. We accept several so users
- * can configure their workspace's :wand: emoji or use a stock alternative.
+ * Reactions that trigger the propose-a-task flow. :wand: only — the team
+ * uses ✅ and :memo: for acknowledgement/notes, so those shouldn't spawn
+ * tasks.
  */
-const TASK_REACTIONS = new Set(["wand", "memo", "white_check_mark", "ballot_box_with_check"]);
+const TASK_REACTIONS = new Set(["wand"]);
 
 function makeAgentHandler(agentName: AgentName) {
   return async (req: express.Request, res: express.Response) => {

@@ -269,6 +269,37 @@ export async function getDb() {
         console.warn("[Database] Review channelId backfill skipped:", e.message);
       }
 
+      // ── Backfill: completedCleans.weekOf → Wed-anchored pay period ─────
+      // Pay periods shifted from Mon→Sun to Wed→Tue in April 2026. Every
+      // row's weekOf needs to match the new anchor so payroll queries pick
+      // up the right cleans. Computed from scheduledDate via MySQL date
+      // arithmetic: weekOf = DATE_SUB(scheduledDate, INTERVAL ((DAYOFWEEK(d) + 3) % 7) DAY).
+      // Idempotent — rows already anchored on the correct Wednesday won't
+      // change, and historical rows stay aligned with their own weekOf
+      // after the first pass. Run on every boot is a no-op once stable.
+      try {
+        const [r] = await _pool
+          .promise()
+          .query(
+            `UPDATE completedCleans
+                SET weekOf = DATE_FORMAT(
+                  DATE_SUB(scheduledDate, INTERVAL ((DAYOFWEEK(scheduledDate) + 3) % 7) DAY),
+                  '%Y-%m-%d'
+                )
+              WHERE scheduledDate IS NOT NULL
+                AND weekOf <> DATE_FORMAT(
+                  DATE_SUB(scheduledDate, INTERVAL ((DAYOFWEEK(scheduledDate) + 3) % 7) DAY),
+                  '%Y-%m-%d'
+                )`,
+          );
+        const affected = (r as any)?.affectedRows ?? 0;
+        if (affected > 0) {
+          console.log(`[Database] Re-anchored ${affected} completedCleans.weekOf to Wed pay periods`);
+        }
+      } catch (e: any) {
+        console.warn("[Database] weekOf backfill skipped:", e.message);
+      }
+
       // ── Migration: drop listings.bedroomTier ───────────────────────────
       // Replaced by the fee-based pay formula (10% of cleaningFeeCharge,
       // rounded up to $10) in April 2026. Historical weekly pay snapshots

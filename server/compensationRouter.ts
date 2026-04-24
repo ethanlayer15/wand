@@ -43,7 +43,7 @@ import {
 } from "./db";
 import { cleaners, listings, completedCleans, pods, reviews, reviewAnalysis, breezewayTeam } from "../drizzle/schema";
 import { eq, desc, gte, and, or, inArray, isNull, isNotNull } from "drizzle-orm";
-import { getWeekOfMonday } from "./payCalculation";
+import { getPayWeekStart } from "./payCalculation";
 import {
   syncCompletedCleans,
   getLastCleanSyncResult,
@@ -674,7 +674,7 @@ export const compensationRouter = router({
       if (!db) throw new Error("Database not available");
 
       const scheduledDate = input.scheduledDate ? new Date(input.scheduledDate) : new Date();
-      const weekOf = getWeekOfMonday(scheduledDate);
+      const weekOf = getPayWeekStart(scheduledDate);
       const isPaired = !!input.pairedCleanerId;
       const splitRatio = isPaired ? "0.50" : "1.00";
 
