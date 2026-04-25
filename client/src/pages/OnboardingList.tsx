@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { ClipboardList, Plus, Building2, AlertCircle, Trash2, Settings, GripVertical, X, Pencil } from "lucide-react";
+import { ClipboardList, Plus, Building2, AlertCircle, Trash2, Settings, GripVertical, X, Pencil, Sparkles, Copy, Check, ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -72,6 +72,7 @@ export default function OnboardingList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [optimizerOpen, setOptimizerOpen] = useState(false);
 
   const projectsQuery = trpc.onboarding.projects.list.useQuery(
     { status: view === "board" ? "active" : statusFilter },
@@ -125,29 +126,42 @@ export default function OnboardingList() {
 
       {/* Filters + view toggle */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        {view === "list" && (
-          <div className="flex items-center gap-2">
-            <Label className="text-sm text-muted-foreground">Status</Label>
-            <Select
-              value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as StatusFilter)}
-            >
-              <SelectTrigger className="h-8 w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="done">Archived</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-        <Tabs value={view} onValueChange={(v) => setView(v as View)}>
-          <TabsList>
-            <TabsTrigger value="list">List</TabsTrigger>
-            <TabsTrigger value="board">Board</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="flex items-center gap-2">
+          {view === "list" && (
+            <>
+              <Label className="text-sm text-muted-foreground">Status</Label>
+              <Select
+                value={statusFilter}
+                onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+              >
+                <SelectTrigger className="h-8 w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="done">Archived</SelectItem>
+                </SelectContent>
+              </Select>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setOptimizerOpen(true)}
+            className="gap-1.5 h-8 text-sm"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Listing Optimizer
+          </Button>
+          <Tabs value={view} onValueChange={(v) => setView(v as View)}>
+            <TabsList>
+              <TabsTrigger value="list">List</TabsTrigger>
+              <TabsTrigger value="board">Board</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
       </div>
 
       {/* Body */}
@@ -185,6 +199,11 @@ export default function OnboardingList() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         templates={templates}
+      />
+      <ListingOptimizerDialog
+        open={optimizerOpen}
+        onClose={() => setOptimizerOpen(false)}
+        projects={projects}
       />
     </div>
   );
@@ -461,6 +480,11 @@ function CreateProjectDialog({
     setKickoff({});
   }
 
+  const SLUG_ORDER: Record<string, number> = { airbnb_new: 0, airbnb_existing: 1 };
+  const sortedTemplates = [...templates].sort(
+    (a, b) => (SLUG_ORDER[a.slug] ?? 99) - (SLUG_ORDER[b.slug] ?? 99),
+  );
+
   const template = templates.find((t) => t.id === templateId);
   const kickoffFields: FieldDef[] = template?.kickoffFieldSchema ?? [];
 
@@ -506,7 +530,7 @@ function CreateProjectDialog({
                 <SelectValue placeholder="Pick a template…" />
               </SelectTrigger>
               <SelectContent>
-                {templates.map((t) => (
+                {sortedTemplates.map((t) => (
                   <SelectItem key={t.id} value={String(t.id)}>
                     {t.name}
                   </SelectItem>
@@ -575,7 +599,9 @@ function OnboardingSettingsDialog({
   templates: any[];
 }) {
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
-  const [settingsTab, setSettingsTab] = useState<"team" | "checklist">("team");
+  const [selectedStageKey, setSelectedStageKey] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [draftLabel, setDraftLabel] = useState("");
   const [defaults, setDefaults] = useState<Record<number, Record<string, string>>>({});
   const [checklistEdits, setChecklistEdits] = useState<Record<number, StageConfig[]>>({});
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -621,10 +647,30 @@ function OnboardingSettingsDialog({
     return () => window.removeEventListener("pointermove", onMove);
   }, [draggingId]);
 
-  const activeTemplateId = selectedTemplateId ?? templates[0]?.id ?? null;
+  const SLUG_ORDER: Record<string, number> = { airbnb_new: 0, airbnb_existing: 1 };
+  const sortedTemplates = [...templates].sort(
+    (a, b) => (SLUG_ORDER[a.slug] ?? 99) - (SLUG_ORDER[b.slug] ?? 99),
+  );
+
+  const activeTemplateId = selectedTemplateId ?? sortedTemplates[0]?.id ?? null;
   const activeTemplate = templates.find((t) => t.id === activeTemplateId);
   const stages: StageConfig[] = (checklistEdits[activeTemplateId!] ?? activeTemplate?.stagesConfig ?? []) as StageConfig[];
-  const teamStages = stages;
+
+  const activeStageKey = selectedStageKey ?? stages[0]?.key ?? null;
+  const activeStage = stages.find((s) => s.key === activeStageKey) ?? null;
+  const activeStageIdx = stages.findIndex((s) => s.key === activeStageKey);
+
+  useEffect(() => {
+    setEditingLabel(false);
+    setDraftLabel(activeStage?.label ?? "");
+  }, [activeStageKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function getMemberName(stageKey: string): string | null {
+    const val = defaults[activeTemplateId!]?.[stageKey];
+    if (!val || val === "__none__") return null;
+    const m = members.find((m) => String(m.id) === val);
+    return m?.name ?? m?.email ?? null;
+  }
 
   function getDefault(stageKey: string): string {
     return defaults[activeTemplateId!]?.[stageKey] ?? "__none__";
@@ -801,119 +847,168 @@ function OnboardingSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Onboarding settings</DialogTitle>
-          <DialogDescription>
-            Configure default team assignments and checklist tasks for each template.
+      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden flex flex-col" style={{ maxHeight: "88vh" }}>
+        {/* Header */}
+        <div className="px-6 pt-5 pb-4 border-b shrink-0">
+          <DialogTitle className="text-base font-semibold">Onboarding Settings</DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground mt-0.5">
+            Assign default team members and manage checklist tasks per stage.
           </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-1">
           {templates.length > 1 && (
-            <div className="space-y-1.5">
-              <Label>Template</Label>
+            <div className="mt-3">
               <Select
                 value={selectedTemplateId ? String(selectedTemplateId) : ""}
-                onValueChange={(v) => setSelectedTemplateId(Number(v))}
+                onValueChange={(v) => { setSelectedTemplateId(Number(v)); setSelectedStageKey(null); }}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-8 w-[260px] text-sm">
                   <SelectValue placeholder="Pick a template…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {templates.map((t) => (
+                  {sortedTemplates.map((t) => (
                     <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           )}
-
-          <Tabs value={settingsTab} onValueChange={(v) => setSettingsTab(v as any)}>
-            <TabsList>
-              <TabsTrigger value="team">Team</TabsTrigger>
-              <TabsTrigger value="checklist">Checklist tasks</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          {settingsTab === "team" && (
-            teamStages.length > 0 ? (
-              <div className="space-y-1 border rounded-md divide-y">
-                {teamStages.map((s) => (
-                  <div key={s.key} className="flex items-center justify-between gap-3 px-3 py-2.5">
-                    <p className="text-sm">{s.label}</p>
-                    <Select value={getDefault(s.key)} onValueChange={(v) => setDefault(s.key, v)}>
-                      <SelectTrigger className="w-[180px] h-8 text-sm">
-                        <SelectValue placeholder="Unassigned" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Unassigned</SelectItem>
-                        {members.map((m) => (
-                          <SelectItem key={m.id} value={String(m.id)}>
-                            {m.name ?? m.email}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">No stages configured.</p>
-            )
-          )}
-
-          {settingsTab === "checklist" && (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragStart={handleDragStart}
-              onDragOver={handleDragOver}
-              onDragEnd={handleDragEnd}
-            >
-              <div className="space-y-4">
-                {stages.map((s) => (
-                  <ChecklistStageEditor
-                    key={s.key}
-                    stage={s}
-                    activeId={draggingId}
-                    onChange={(items) => updateStageChecklist(s.key, items)}
-                    onLabelChange={(label) => updateStageLabel(s.key, label)}
-                  />
-                ))}
-                {stages.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No stages configured.</p>
-                )}
-              </div>
-              {draggingId && createPortal(
-                <div
-                  style={{
-                    position: "fixed",
-                    left: cursorPos.x + 12,
-                    top: cursorPos.y - 16,
-                    zIndex: 99999,
-                    pointerEvents: "none",
-                  }}
-                  className="flex items-center gap-2 bg-white border border-zinc-300 rounded-md shadow-2xl px-2 py-0.5 ring-2 ring-blue-400/30 min-w-48"
-                >
-                  <GripVertical className="h-4 w-4 text-zinc-400 shrink-0" />
-                  <div className="h-8 flex-1 rounded-md border border-zinc-200 bg-white px-3 flex items-center text-sm text-zinc-800">
-                    {draggingLabel || "Task"}
-                  </div>
-                  <div className="w-4 shrink-0" />
-                </div>,
-                document.body
-              )}
-            </DndContext>
-          )}
         </div>
 
-        <DialogFooter>
+        {/* Two-panel body */}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {/* Left sidebar: stage list */}
+          <div className="w-52 shrink-0 border-r bg-zinc-50 overflow-y-auto">
+            {stages.map((s, i) => {
+              const isActive = s.key === activeStageKey;
+              const ownerName = getMemberName(s.key);
+              const itemCount = (s.defaultChecklist ?? []).length;
+              const color = COL_COLORS[i % COL_COLORS.length];
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => setSelectedStageKey(s.key)}
+                  className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 border-b border-zinc-100 transition-colors ${
+                    isActive ? "bg-white border-l-[3px] border-l-zinc-800" : "hover:bg-white/70"
+                  }`}
+                >
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 text-white ${color}`}>
+                    {i + 1}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-sm leading-tight truncate ${isActive ? "font-semibold text-zinc-900" : "font-medium text-zinc-600"}`}>
+                      {s.label}
+                    </p>
+                    <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                      {ownerName ?? <span className="italic">Unassigned</span>}
+                      {" · "}{itemCount} task{itemCount !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Right panel: selected stage */}
+          <div className="flex-1 min-w-0 overflow-y-auto">
+            {activeStage ? (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={handleDragStart}
+                onDragOver={handleDragOver}
+                onDragEnd={handleDragEnd}
+              >
+                <div className="p-5 space-y-5">
+                  {/* Stage header + owner */}
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider mb-0.5">
+                        Stage {activeStageIdx + 1}
+                      </p>
+                      {editingLabel ? (
+                        <Input
+                          autoFocus
+                          value={draftLabel}
+                          onChange={(e) => setDraftLabel(e.target.value)}
+                          onBlur={() => {
+                            const trimmed = draftLabel.trim();
+                            if (trimmed && trimmed !== activeStage.label) updateStageLabel(activeStage.key, trimmed);
+                            else setDraftLabel(activeStage.label);
+                            setEditingLabel(false);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") e.currentTarget.blur();
+                            if (e.key === "Escape") { setDraftLabel(activeStage.label); setEditingLabel(false); }
+                          }}
+                          className="h-8 font-semibold text-base"
+                        />
+                      ) : (
+                        <div className="flex items-center gap-1.5 group/label">
+                          <p className="font-semibold text-zinc-900 text-base">{activeStage.label}</p>
+                          <button
+                            onClick={() => { setDraftLabel(activeStage.label); setEditingLabel(true); }}
+                            className="opacity-0 group-hover/label:opacity-100 transition-opacity p-0.5 text-zinc-400 hover:text-zinc-700 rounded"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-1 text-right shrink-0">
+                      <p className="text-[11px] text-zinc-400 font-medium uppercase tracking-wider">Default team member</p>
+                      <Select value={getDefault(activeStage.key)} onValueChange={(v) => setDefault(activeStage.key, v)}>
+                        <SelectTrigger className="w-[180px] h-8 text-sm">
+                          <SelectValue placeholder="Unassigned" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Unassigned</SelectItem>
+                          {members.map((m) => (
+                            <SelectItem key={m.id} value={String(m.id)}>
+                              {m.name ?? m.email}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Checklist tasks</p>
+                    <ChecklistStageEditor
+                      stage={activeStage}
+                      activeId={draggingId}
+                      onChange={(items) => updateStageChecklist(activeStage.key, items)}
+                    />
+                  </div>
+                </div>
+
+                {draggingId && createPortal(
+                  <div
+                    style={{ position: "fixed", left: cursorPos.x + 12, top: cursorPos.y - 16, zIndex: 99999, pointerEvents: "none" }}
+                    className="flex items-center gap-2 bg-white border border-zinc-300 rounded-md shadow-2xl px-2 py-0.5 ring-2 ring-blue-400/30 min-w-48"
+                  >
+                    <GripVertical className="h-4 w-4 text-zinc-400 shrink-0" />
+                    <div className="h-8 flex-1 rounded-md border border-zinc-200 bg-white px-3 flex items-center text-sm text-zinc-800">
+                      {draggingLabel || "Task"}
+                    </div>
+                  </div>,
+                  document.body
+                )}
+              </DndContext>
+            ) : (
+              <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+                Select a stage on the left to edit it.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t shrink-0 flex justify-end gap-2 bg-white">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button disabled={isSaving || !activeTemplateId} onClick={handleSave}>
             {isSaving ? "Saving…" : "Save"}
           </Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -923,25 +1018,11 @@ function ChecklistStageEditor({
   stage,
   activeId,
   onChange,
-  onLabelChange,
 }: {
   stage: StageConfig;
   activeId: string | null;
   onChange: (items: ChecklistItem[]) => void;
-  onLabelChange: (label: string) => void;
 }) {
-  const [editingLabel, setEditingLabel] = useState(false);
-  const [draftLabel, setDraftLabel] = useState(stage.label);
-
-  useEffect(() => { setDraftLabel(stage.label); }, [stage.label]);
-
-  function commitLabel() {
-    const trimmed = draftLabel.trim();
-    if (trimmed && trimmed !== stage.label) onLabelChange(trimmed);
-    else setDraftLabel(stage.label);
-    setEditingLabel(false);
-  }
-
   const items = stage.defaultChecklist ?? [];
   const sentinelId = `__end_${stage.key}`;
   // Simple item IDs — no stageKey prefix — so active.id remains valid in whichever
@@ -962,31 +1043,6 @@ function ChecklistStageEditor({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-1.5 group/header">
-        {editingLabel ? (
-          <Input
-            autoFocus
-            value={draftLabel}
-            onChange={(e) => setDraftLabel(e.target.value)}
-            onBlur={commitLabel}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitLabel();
-              if (e.key === "Escape") { setDraftLabel(stage.label); setEditingLabel(false); }
-            }}
-            className="h-7 text-sm font-medium"
-          />
-        ) : (
-          <>
-            <p className="text-sm font-medium">{stage.label}</p>
-            <button
-              onClick={() => { setDraftLabel(stage.label); setEditingLabel(true); }}
-              className="opacity-0 group-hover/header:opacity-100 transition-opacity p-0.5 text-zinc-400 hover:text-zinc-700 rounded"
-            >
-              <Pencil className="h-3 w-3" />
-            </button>
-          </>
-        )}
-      </div>
       <SortableContext items={dragIds} strategy={verticalListSortingStrategy}>
         <div
           ref={setDropRef}
@@ -1077,6 +1133,461 @@ function SortableTaskSentinel({ dragId }: { dragId: string }) {
       className="h-8 w-full"
       aria-hidden
     />
+  );
+}
+
+// ── Listing Optimizer Dialog ──────────────────────────────────────────
+const ALL_AMENITIES = [
+  "WiFi",
+  "Full kitchen",
+  "Free parking",
+  "EV charging",
+  "Hot tub",
+  "Pool",
+  "Fire pit / fire table",
+  "BBQ grill",
+  "Game room",
+  "Washer + dryer",
+  "Pet friendly",
+  "Mountain view",
+  "Lake access",
+  "Creek / river",
+  "Large outdoor space / yard",
+  "Smart TV / streaming",
+  "Work desk / workspace",
+  "Coffee station",
+  "Board games / yard games",
+  "Fireplace",
+  "Jacuzzi",
+  "Sauna",
+  "Kayaks / canoes",
+  "Bikes",
+  "Gym / fitness equipment",
+];
+
+type OptimizerStep = 1 | 2 | 3;
+
+type GeneratedListing = {
+  title: string;
+  aboutThisSpace: string;
+  theSpace: string;
+  guestAccess: string;
+  otherThingsToNote: string;
+  raw: string;
+};
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  function handleCopy() {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1 rounded text-zinc-400 hover:text-zinc-700 transition-colors shrink-0"
+      title="Copy to clipboard"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
+function OutputSection({ label, content }: { label: string; content: string }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">{label}</p>
+        <CopyButton text={content} />
+      </div>
+      <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed">
+        {content}
+      </div>
+    </div>
+  );
+}
+
+function ListingOptimizerDialog({
+  open,
+  onClose,
+  projects,
+}: {
+  open: boolean;
+  onClose: () => void;
+  projects: any[];
+}) {
+  const [step, setStep] = useState<OptimizerStep>(1);
+  const [useProject, setUseProject] = useState<"project" | "manual">("project");
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [manualAddress, setManualAddress] = useState("");
+  const [manualName, setManualName] = useState("");
+  const [airbnbUrl, setAirbnbUrl] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [fetchStatus, setFetchStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
+  const [extraNotes, setExtraNotes] = useState("");
+  const [result, setResult] = useState<GeneratedListing | null>(null);
+
+  const fetchListing = trpc.listingOptimizer.fetchListing.useMutation({
+    onSuccess: (data) => {
+      setDraftTitle(data.title);
+      setDraftDescription(data.description);
+      setFetchStatus("success");
+    },
+    onError: (e) => {
+      setFetchStatus("error");
+      toast.error(e.message);
+    },
+  });
+
+  const generate = trpc.listingOptimizer.generate.useMutation({
+    onSuccess: (data) => {
+      setResult(data);
+      setStep(3);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function reset() {
+    setStep(1);
+    setUseProject("project");
+    setSelectedProjectId(null);
+    setManualAddress("");
+    setManualName("");
+    setAirbnbUrl("");
+    setDraftTitle("");
+    setDraftDescription("");
+    setFetchStatus("idle");
+    setSelectedAmenities([]);
+    setExtraNotes("");
+    setResult(null);
+  }
+
+  function handleClose() {
+    reset();
+    onClose();
+  }
+
+  function handleUrlBlur() {
+    const url = airbnbUrl.trim();
+    if (!url || !url.includes("airbnb.com") || fetchStatus === "loading") return;
+    setFetchStatus("loading");
+    fetchListing.mutate({ url });
+  }
+
+  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  const resolvedAddress =
+    useProject === "project"
+      ? (selectedProject?.address ?? manualAddress)
+      : manualAddress;
+  const resolvedName =
+    useProject === "project" ? (selectedProject?.propertyName ?? "") : manualName;
+
+  function canGoToStep2(): boolean {
+    return resolvedAddress.trim().length > 0;
+  }
+
+  function handleGenerate() {
+    generate.mutate({
+      projectId: useProject === "project" ? (selectedProjectId ?? undefined) : undefined,
+      address: resolvedAddress.trim(),
+      propertyName: resolvedName.trim() || undefined,
+      amenities: selectedAmenities,
+      extraNotes: extraNotes.trim() || undefined,
+      draftTitle: draftTitle.trim() || undefined,
+      draftDescription: draftDescription.trim() || undefined,
+    });
+  }
+
+  function toggleAmenity(a: string) {
+    setSelectedAmenities((prev) =>
+      prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a],
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[88vh] flex flex-col p-0 gap-0 overflow-hidden">
+        {/* Header */}
+        <div className="px-6 pt-5 pb-4 border-b shrink-0">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            <DialogTitle className="text-base font-semibold">Listing Optimizer</DialogTitle>
+          </div>
+          <DialogDescription className="text-sm text-muted-foreground mt-1">
+            Paste Seth's Airbnb draft link and we'll optimize it into a polished listing.
+          </DialogDescription>
+          {/* Step indicators */}
+          <div className="flex items-center gap-1.5 mt-3">
+            {([1, 2, 3] as OptimizerStep[]).map((s) => (
+              <div
+                key={s}
+                className={`h-1.5 w-12 rounded-full transition-all ${
+                  s <= step ? "bg-violet-500" : "bg-zinc-200"
+                }`}
+              />
+            ))}
+            <span className="text-xs text-muted-foreground ml-1">Step {step} of 3</span>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* Step 1: Property info */}
+          {step === 1 && (
+            <div className="space-y-4">
+              {/* Airbnb draft link */}
+              <div className="space-y-1.5">
+                <Label>Airbnb draft listing link</Label>
+                <div className="relative">
+                  <Input
+                    value={airbnbUrl}
+                    onChange={(e) => { setAirbnbUrl(e.target.value); setFetchStatus("idle"); }}
+                    onBlur={handleUrlBlur}
+                    placeholder="https://www.airbnb.com/rooms/..."
+                    className="pr-8"
+                  />
+                  {fetchStatus === "loading" && (
+                    <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-zinc-400" />
+                  )}
+                  {fetchStatus === "success" && (
+                    <Check className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-500" />
+                  )}
+                </div>
+                {fetchStatus === "success" && (
+                  <p className="text-xs text-emerald-600">Draft loaded — title and description pulled from Airbnb.</p>
+                )}
+                {fetchStatus === "error" && (
+                  <p className="text-xs text-amber-600">Couldn't read the listing automatically. Paste the content below manually.</p>
+                )}
+              </div>
+
+              {/* Draft title + description — shown after fetch or on error */}
+              {(fetchStatus === "success" || fetchStatus === "error" || draftTitle || draftDescription) && (
+                <div className="space-y-3 pt-1 border-t">
+                  <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider pt-1">Seth's draft</p>
+                  <div className="space-y-1.5">
+                    <Label>Draft title</Label>
+                    <Input
+                      value={draftTitle}
+                      onChange={(e) => setDraftTitle(e.target.value)}
+                      placeholder="e.g. Cozy cabin near Asheville with creek"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Draft description</Label>
+                    <Textarea
+                      value={draftDescription}
+                      onChange={(e) => setDraftDescription(e.target.value)}
+                      placeholder="Paste Seth's description here…"
+                      rows={4}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Property source */}
+              <div className="space-y-3 pt-1 border-t">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider pt-1">Property</p>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant={useProject === "project" ? "default" : "outline"}
+                    onClick={() => setUseProject("project")}
+                    className="h-8"
+                  >
+                    Select a project
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={useProject === "manual" ? "default" : "outline"}
+                    onClick={() => setUseProject("manual")}
+                    className="h-8"
+                  >
+                    Enter manually
+                  </Button>
+                </div>
+
+                {useProject === "project" ? (
+                  <div className="space-y-1.5">
+                    <Select
+                      value={selectedProjectId ? String(selectedProjectId) : ""}
+                      onValueChange={(v) => setSelectedProjectId(Number(v))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pick a project…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {projects.map((p) => (
+                          <SelectItem key={p.id} value={String(p.id)}>
+                            {p.propertyName}
+                            {p.address ? ` — ${p.address}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedProject && !selectedProject.address && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-amber-600">No address saved on this project — enter it below.</p>
+                        <Input
+                          value={manualAddress}
+                          onChange={(e) => setManualAddress(e.target.value)}
+                          placeholder="123 Main St, Asheville, NC 28801"
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <Label>Property name <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <Input
+                        value={manualName}
+                        onChange={(e) => setManualName(e.target.value)}
+                        placeholder="e.g. Laurel Cove"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Full address</Label>
+                      <Input
+                        value={manualAddress}
+                        onChange={(e) => setManualAddress(e.target.value)}
+                        placeholder="123 Main St, Asheville, NC 28801"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Amenities + notes */}
+          {step === 2 && (
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-medium text-zinc-700 mb-1">What amenities does the property have?</p>
+                <p className="text-xs text-muted-foreground">Select all that apply.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {ALL_AMENITIES.map((a) => {
+                  const active = selectedAmenities.includes(a);
+                  return (
+                    <button
+                      key={a}
+                      onClick={() => toggleAmenity(a)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                        active
+                          ? "bg-violet-600 border-violet-600 text-white"
+                          : "border-zinc-200 text-zinc-600 hover:border-zinc-400 hover:bg-zinc-50"
+                      }`}
+                    >
+                      {a}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="space-y-1.5 pt-1">
+                <Label>Anything else the AI should know? <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Textarea
+                  value={extraNotes}
+                  onChange={(e) => setExtraNotes(e.target.value)}
+                  placeholder="e.g. The cabin sits right on a private creek. Perfect for families. 15 min from downtown Asheville…"
+                  rows={3}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Generated output */}
+          {step === 3 && result && (
+            <div className="space-y-4">
+              {/* Title */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Title</p>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-xs ${result.title.length > 50 ? "text-red-500 font-medium" : "text-zinc-400"}`}>
+                      {result.title.length}/50 chars
+                    </span>
+                    <CopyButton text={result.title} />
+                  </div>
+                </div>
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm font-semibold text-zinc-900">
+                  {result.title}
+                </div>
+              </div>
+
+              <OutputSection label="About This Space" content={result.aboutThisSpace} />
+              <OutputSection label="The Space" content={result.theSpace} />
+              <OutputSection label="Guest Access" content={result.guestAccess} />
+              <OutputSection label="Other Things to Note" content={result.otherThingsToNote} />
+
+              <div className="flex justify-center pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setResult(null); setStep(2); }}
+                  className="gap-1.5 text-xs"
+                >
+                  Regenerate with different info
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Loading state */}
+          {generate.isPending && (
+            <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
+              <Loader2 className="h-8 w-8 text-violet-500 animate-spin" />
+              <p className="text-sm font-medium text-zinc-700">Researching nearby attractions…</p>
+              <p className="text-xs text-muted-foreground">This usually takes 10–20 seconds.</p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t shrink-0 flex justify-between gap-2 bg-white">
+          <Button variant="ghost" onClick={step === 1 ? handleClose : () => setStep((s) => (s - 1) as OptimizerStep)} className="gap-1.5">
+            {step === 1 ? "Cancel" : <><ChevronLeft className="h-4 w-4" /> Back</>}
+          </Button>
+          <div className="flex gap-2">
+            {step < 3 && (
+              <Button
+                onClick={() => {
+                  if (step === 1) {
+                    if (!canGoToStep2()) {
+                      toast.error("Please enter an address to continue");
+                      return;
+                    }
+                    setStep(2);
+                  } else if (step === 2) {
+                    handleGenerate();
+                  }
+                }}
+                disabled={generate.isPending}
+                className="gap-1.5"
+              >
+                {step === 2 ? (
+                  generate.isPending ? (
+                    <><Loader2 className="h-4 w-4 animate-spin" /> Generating…</>
+                  ) : (
+                    <><Sparkles className="h-4 w-4" /> Generate listing</>
+                  )
+                ) : (
+                  <>Next <ChevronRight className="h-4 w-4" /></>
+                )}
+              </Button>
+            )}
+            {step === 3 && (
+              <Button onClick={handleClose}>Done</Button>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

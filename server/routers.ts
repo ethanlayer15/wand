@@ -40,6 +40,7 @@ import { boardsRouter } from "./boardsRouter";
 import { onCallRouter } from "./onCallRouter";
 import { slackLinksRouter } from "./slackLinksRouter";
 import { onboardingRouter } from "./onboardingRouter";
+import { listingOptimizerRouter } from "./listingOptimizerRouter";
 import { ENV } from "./_core/env";
 import { sendSlackNotification, checkAndNotifyUnassignedSdts } from "./sdtNotifier";
 import { checkAndNotifyLastMinuteChanges } from "./lastMinuteNotifier";
@@ -72,6 +73,7 @@ export const appRouter = router({
   onCall: onCallRouter,
   slackLinks: slackLinksRouter,
   onboarding: onboardingRouter,
+  listingOptimizer: listingOptimizerRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {

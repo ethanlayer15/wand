@@ -55,7 +55,7 @@ export const onboardingRouter = router({
         .select()
         .from(onboardingTemplates)
         .where(eq(onboardingTemplates.isActive, true))
-        .orderBy(desc(onboardingTemplates.id));
+        .orderBy(asc(onboardingTemplates.id));
       // Derive stageOwnerDefaults from defaultOwnerId stored in each stage
       return rows.map((t) => ({
         ...t,
@@ -955,6 +955,63 @@ export const onboardingRouter = router({
           actorUserId: userId,
           data: { fieldKey: input.key, custom: true, label: input.label },
         });
+        return { ok: true };
+      }),
+
+    /**
+     * Rename or hide a checklist item on a specific stage instance.
+     * Stores overrides in checklistState so the template is never touched.
+     */
+    updateChecklistItemMeta: protectedProcedure
+      .input(
+        z.object({
+          stageInstanceId: z.number(),
+          itemId: z.string(),
+          label: z.string().min(1).max(500).optional(),
+          hidden: z.boolean().optional(),
+        }),
+      )
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const userId = requireUserId(ctx);
+
+        const [stage] = await db
+          .select()
+          .from(onboardingStageInstances)
+          .where(eq(onboardingStageInstances.id, input.stageInstanceId))
+          .limit(1);
+        if (!stage) throw new TRPCError({ code: "NOT_FOUND" });
+
+        const state = (stage.checklistState as Record<string, any>) ?? {};
+        const prev = state[input.itemId] ?? {};
+        if (input.label !== undefined) prev.labelOverride = input.label;
+        if (input.hidden !== undefined) prev.hidden = input.hidden;
+        state[input.itemId] = prev;
+
+        await db
+          .update(onboardingStageInstances)
+          .set({ checklistState: state })
+          .where(eq(onboardingStageInstances.id, input.stageInstanceId));
+
+        await db.insert(onboardingEvents).values({
+          projectId: stage.projectId,
+          stageInstanceId: stage.id,
+          eventType: "checklist_item_toggled",
+          actorUserId: userId,
+          data: { itemId: input.itemId, ...(input.hidden ? { hidden: true } : { labelOverride: input.label }) },
+        });
+        return { ok: true };
+      }),
+
+    /** Delete a comment from the events feed. */
+    deleteComment: protectedProcedure
+      .input(z.object({ eventId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        requireUserId(ctx);
+        await db.delete(onboardingEvents).where(eq(onboardingEvents.id, input.eventId));
         return { ok: true };
       }),
 
