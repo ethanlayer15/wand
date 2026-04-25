@@ -589,8 +589,7 @@ function StagePanel({
                 )}
                 <Button
                   size="sm"
-                  variant="outline"
-                  className="gap-1.5"
+                  className="gap-1.5 bg-orange-500 hover:bg-orange-600 text-white border-0"
                   onClick={() => setEmailDialogOpen(true)}
                 >
                   <Mail className="h-4 w-4" />
