@@ -1,14 +1,5 @@
 /**
- * Onboarding project detail page.
- *
- * Layout: project header on top, one tab per stage (with status badge),
- * selected stage panel showing checklist (template + custom + per-item
- * notes), per-stage fields (template + custom), per-stage comments, and
- * action buttons (complete / reopen / notify next). Activity log lives in
- * a panel at the bottom.
- *
- * Stages are concurrent — completing one or notifying the next does not
- * block the other; the badges show what's actually open.
+ * Onboarding project detail page — sidebar nav + stage panel layout.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
@@ -20,12 +11,6 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -49,6 +34,12 @@ import {
   ArrowRight,
   MessageSquarePlus,
   Mail,
+  CheckCheck,
+  Clock,
+  Pencil,
+  Trash2,
+  X,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,11 +70,45 @@ export default function OnboardingProject({ id }: { id: number }) {
   const data = projectQuery.data;
 
   const [activeStageIdx, setActiveStageIdx] = useState<number | null>(null);
+  const [notifyNextOpen, setNotifyNextOpen] = useState(false);
+  const [completeProjectOpen, setCompleteProjectOpen] = useState(false);
 
-  // Default to the latest active stage when data first lands
+  const completeProject = trpc.onboarding.projects.update.useMutation({
+    onSuccess: () => {
+      toast.success("Project archived");
+      setLocation("/onboarding");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const completeStage = trpc.onboarding.stages.complete.useMutation({
+    onSuccess: () => {
+      toast.success("Stage marked complete");
+      projectQuery.refetch();
+      const d = projectQuery.data;
+      if (!d || activeStageIdx === null) return;
+      const stgs = d.stages as any[];
+      const curSt = stgs.find((s: any) => s.stageIndex === activeStageIdx);
+      const nextSt = curSt ? stgs.find((s: any) => s.stageIndex === curSt.stageIndex + 1) : undefined;
+      if (curSt && curSt.stageIndex < stgs.length - 1 && !nextSt?.notifiedAt) {
+        setNotifyNextOpen(true);
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const reopenStage = trpc.onboarding.stages.reopen.useMutation({
+    onSuccess: () => { toast.success("Stage reopened"); projectQuery.refetch(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const notifyNext = trpc.onboarding.stages.notifyNext.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
+
   useEffect(() => {
     if (data && activeStageIdx === null) {
-      setActiveStageIdx(data.project.currentStageIndex ?? 0);
+      setActiveStageIdx(0);
     }
   }, [data, activeStageIdx]);
 
@@ -104,6 +129,7 @@ export default function OnboardingProject({ id }: { id: number }) {
   }
 
   const { project, template, stages, events } = data;
+
   const stagesConfig = (template?.stagesConfig ?? []) as Array<{
     key: string;
     label: string;
@@ -118,11 +144,15 @@ export default function OnboardingProject({ id }: { id: number }) {
       : undefined;
   const activeStageDef =
     activeStageIdx !== null ? stagesConfig[activeStageIdx] : undefined;
+  const nextStage = activeStage
+    ? (stages.find((ns: any) => ns.stageIndex === activeStage.stageIndex + 1) ?? null)
+    : null;
+  const isLastStage = activeStage ? activeStage.stageIndex === stages.length - 1 : false;
 
   return (
-    <div className="p-6 space-y-6 max-w-[1100px] mx-auto">
+    <div className="flex flex-col h-svh overflow-hidden pt-6 px-6 pb-6">
       {/* Header */}
-      <div className="space-y-2">
+      <div className="shrink-0 space-y-2 mb-6">
         <Button
           variant="ghost"
           size="sm"
@@ -131,8 +161,8 @@ export default function OnboardingProject({ id }: { id: number }) {
         >
           <ArrowLeft className="h-4 w-4 mr-1" /> Onboarding
         </Button>
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="space-y-1">
+        <div className="flex items-start gap-4">
+          <div className="flex-1 min-w-0 space-y-1">
             <h1 className="text-2xl font-semibold tracking-tight">
               {project.propertyName}
             </h1>
@@ -148,68 +178,216 @@ export default function OnboardingProject({ id }: { id: number }) {
                     ? "bg-blue-100 text-blue-800"
                     : project.status === "done"
                       ? "bg-emerald-100 text-emerald-800"
-                      : project.status === "blocked"
-                        ? "bg-amber-100 text-amber-800"
-                        : "bg-zinc-200 text-zinc-700"
+                      : "bg-zinc-200 text-zinc-700"
                 }
               >
-                {project.status}
+                {project.status === "done" ? "Archived" : project.status}
               </Badge>
             </div>
           </div>
+          {project.status !== "done" && (
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center gap-2 flex-nowrap justify-end">
+                {activeStage && (
+                  activeStage.state !== "done" ? (
+                    <Button
+                      onClick={() => completeStage.mutate({ stageInstanceId: activeStage.id })}
+                      disabled={completeStage.isPending}
+                      className="gap-1.5"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      {completeStage.isPending ? "Completing…" : "Mark stage complete"}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      onClick={() => reopenStage.mutate({ stageInstanceId: activeStage.id })}
+                      disabled={reopenStage.isPending}
+                      className="gap-1.5"
+                    >
+                      <RotateCw className="h-4 w-4" />
+                      {reopenStage.isPending ? "Reopening…" : "Reopen stage"}
+                    </Button>
+                  )
+                )}
+                <Button
+                  variant="outline"
+                  className="gap-1.5 text-zinc-600 border-zinc-300 hover:bg-zinc-50"
+                  onClick={() => setCompleteProjectOpen(true)}
+                >
+                  <CheckCheck className="h-4 w-4" />
+                  Archive project
+                </Button>
+              </div>
+              {/* Notification status — fixed height so buttons don't jump */}
+              <div className="h-7 flex items-center justify-end">
+                {activeStage && !isLastStage && nextStage?.notifiedAt && (
+                  <div className="flex items-center gap-2 flex-nowrap justify-end">
+                    {nextStage.notificationReceivedAt ? (
+                      <div className="flex items-center gap-1.5 text-sm text-emerald-700 font-medium">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Next stage notified — confirmed
+                      </div>
+                    ) : !nextStage.notificationSkipped ? (
+                      <>
+                        <div className="flex items-center gap-1.5 text-sm text-amber-700">
+                          <Clock className="h-3.5 w-3.5" />
+                          Waiting on next stage confirmation
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setNotifyNextOpen(true)}
+                          className="h-7 px-2 text-xs text-muted-foreground gap-1"
+                        >
+                          <ArrowRight className="h-3 w-3" />
+                          Re-notify
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-1.5 text-sm text-zinc-500">
+                          <ArrowRight className="h-3.5 w-3.5" />
+                          Notification skipped
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setNotifyNextOpen(true)}
+                          className="h-7 px-2 text-xs text-muted-foreground gap-1"
+                        >
+                          <ArrowRight className="h-3 w-3" />
+                          Notify now
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Stage tabs */}
-      <Tabs
-        value={activeStageIdx !== null ? String(activeStageIdx) : undefined}
-        onValueChange={(v) => setActiveStageIdx(Number(v))}
-      >
-        <TabsList className="flex-wrap h-auto">
-          {stages.map((s: any) => (
-            <TabsTrigger
-              key={s.id}
-              value={String(s.stageIndex)}
-              className="gap-2"
-            >
-              <span>
-                {stagesConfig[s.stageIndex]?.label ?? `Stage ${s.stageIndex + 1}`}
-              </span>
-              <Badge
-                variant="secondary"
-                className={`text-[10px] py-0 ${STATE_BADGE[s.state] ?? ""}`}
+      {/* Two-column: stage navigator + panel */}
+      <div className="flex gap-6 flex-1 min-h-0 overflow-hidden">
+        {/* Stage navigator */}
+        <nav className="w-48 shrink-0 space-y-0.5 pt-1 overflow-y-auto" style={{ scrollbarGutter: "stable" }}>
+          {stages.map((s: any) => {
+            const isActive = s.stageIndex === activeStageIdx;
+            const isDone = s.state === "done";
+            const isInProgress = s.state === "in_progress";
+            const label = stagesConfig[s.stageIndex]?.label ?? `Stage ${s.stageIndex + 1}`;
+            return (
+              <button
+                key={s.id}
+                onClick={() => setActiveStageIdx(s.stageIndex)}
+                className={`w-full text-left flex items-start gap-2.5 px-3 py-2.5 rounded-lg transition-colors ${
+                  isActive
+                    ? "bg-zinc-900 text-white"
+                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+                }`}
               >
-                {STATE_LABEL[s.state] ?? s.state}
-              </Badge>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+                <span className="mt-0.5 shrink-0">
+                  {isDone ? (
+                    <CheckCircle2 className={`h-4 w-4 ${isActive ? "text-emerald-400" : "text-emerald-500"}`} />
+                  ) : isInProgress ? (
+                    <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center ${isActive ? "border-blue-400" : "border-blue-500"}`}>
+                      <div className={`h-1.5 w-1.5 rounded-full ${isActive ? "bg-blue-400" : "bg-blue-500"}`} />
+                    </div>
+                  ) : (
+                    <div className={`h-4 w-4 rounded-full border-2 ${isActive ? "border-zinc-500" : "border-zinc-300"}`} />
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium leading-tight truncate">{label}</p>
+                  {s.stageIndex > 0 && (
+                    <p className="text-xs mt-0.5 truncate leading-snug text-zinc-400">
+                      {s.ownerName ? s.ownerName.split(" ")[0] : "Unassigned"}
+                    </p>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </nav>
 
-        {stages.map((s: any) => (
-          <TabsContent key={s.id} value={String(s.stageIndex)} className="mt-4">
-            {activeStage && activeStageDef && s.id === activeStage.id ? (
+        {/* Stage panel */}
+        <div className="flex-1 min-w-0 overflow-y-auto" style={{ scrollbarGutter: "stable" }}>
+          <div className="pb-8">
+            {activeStage && activeStageDef ? (
               <StagePanel
                 projectId={project.id}
                 stage={activeStage}
                 stageDef={activeStageDef}
+                events={events}
                 onMutate={() => projectQuery.refetch()}
-                isLastStage={s.stageIndex === stages.length - 1}
+                isLastStage={isLastStage}
                 isKickoff={activeStage.stageIndex === 0}
                 kickoffData={(project.kickoffData ?? {}) as Record<string, any>}
                 kickoffSchema={(template?.kickoffFieldSchema ?? []) as FieldDef[]}
                 propertyName={project.propertyName}
                 projectAddress={project.address ?? undefined}
                 templateName={template?.name}
-                allStages={stages}
-                allStagesConfig={stagesConfig}
+                nextStage={nextStage}
+                onOpenNotifyNext={() => setNotifyNextOpen(true)}
               />
             ) : null}
-          </TabsContent>
-        ))}
-      </Tabs>
+          </div>
+        </div>
+      </div>
 
-      {/* Activity log */}
-      <ActivityLog events={events} />
+      {/* Archive project confirmation dialog */}
+      <Dialog open={completeProjectOpen} onOpenChange={(o) => { if (!o) setCompleteProjectOpen(false); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Archive this project?</DialogTitle>
+            <DialogDescription>
+              Only do this when every stage is fully done and the property is live.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 flex items-start gap-2.5">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
+            <span>
+              Don't confuse this with completing a single stage — use{" "}
+              <strong>Mark stage complete</strong> for that.
+              Archiving the project is permanent and removes it from the active pipeline.
+            </span>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCompleteProjectOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={completeProject.isPending}
+              onClick={() => completeProject.mutate({ id: project.id, status: "done" })}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+            >
+              <CheckCheck className="h-4 w-4" />
+              {completeProject.isPending ? "Archiving…" : "Yes, archive project"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Notify next stage dialog */}
+      {activeStage && activeStageDef && !isLastStage && (
+        <NotifyNextDialog
+          open={notifyNextOpen}
+          onClose={() => setNotifyNextOpen(false)}
+          stageInstanceId={activeStage.id}
+          projectId={project.id}
+          propertyName={project.propertyName}
+          currentStageName={activeStageDef.label}
+          currentStageOwnerName={activeStage.ownerName ?? null}
+          nextStageName={stagesConfig[activeStage.stageIndex + 1]?.label ?? null}
+          nextStageOwnerName={nextStage?.ownerName ?? null}
+          nextStageOwnerSlackId={(nextStage as any)?.ownerSlackUserId ?? null}
+          isSameOwner={nextStage?.ownerUserId != null && nextStage.ownerUserId === activeStage.ownerUserId}
+          notifyNext={notifyNext}
+          onMutate={() => projectQuery.refetch()}
+        />
+      )}
     </div>
   );
 }
@@ -219,6 +397,7 @@ function StagePanel({
   projectId,
   stage,
   stageDef,
+  events,
   onMutate,
   isLastStage,
   isKickoff = false,
@@ -227,8 +406,8 @@ function StagePanel({
   propertyName,
   projectAddress,
   templateName,
-  allStages,
-  allStagesConfig,
+  nextStage,
+  onOpenNotifyNext,
 }: {
   projectId: number;
   stage: any;
@@ -238,6 +417,7 @@ function StagePanel({
     defaultChecklist: ChecklistItemDef[];
     defaultFields: FieldDef[];
   };
+  events: any[];
   onMutate: () => void;
   isLastStage: boolean;
   isKickoff?: boolean;
@@ -246,17 +426,16 @@ function StagePanel({
   propertyName?: string;
   projectAddress?: string;
   templateName?: string;
-  allStages?: any[];
-  allStagesConfig?: Array<{ key: string; label: string; ownerRole?: string; defaultChecklist: ChecklistItemDef[]; defaultFields: FieldDef[] }>;
+  nextStage?: any | null;
+  onOpenNotifyNext: () => void;
 }) {
   const checklistState = (stage.checklistState ?? {}) as Record<string, any>;
   const stageData = (stage.stageData ?? {}) as Record<string, any>;
 
-  // Custom items live inside checklistState too — separate by `custom: true`
   const templateItems = stageDef.defaultChecklist;
   const customItems = useMemo(() => {
     return Object.entries(checklistState)
-      .filter(([, v]: any) => v?.custom)
+      .filter(([, v]: any) => v?.custom && !v?.hidden)
       .map(([id, v]: any) => ({
         id,
         label: v.label as string,
@@ -264,12 +443,21 @@ function StagePanel({
       }));
   }, [checklistState]);
 
-  // Custom fields live in stageData._custom (array)
+  const visibleTemplateItems = templateItems.filter((it) => !checklistState[it.id]?.hidden);
+  const checklistTotal = visibleTemplateItems.length + customItems.length;
+  const checklistDone = [...visibleTemplateItems, ...customItems].filter(
+    (it) => checklistState[it.id]?.done,
+  ).length;
+
   const customFields = Array.isArray(stageData._custom)
     ? (stageData._custom as Array<FieldDef & { value?: any }>)
     : [];
 
   const toggleItem = trpc.onboarding.stages.toggleChecklistItem.useMutation({
+    onSuccess: () => onMutate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const updateItemMeta = trpc.onboarding.stages.updateChecklistItemMeta.useMutation({
     onSuccess: () => onMutate(),
     onError: (e) => toast.error(e.message),
   });
@@ -281,10 +469,6 @@ function StagePanel({
     onSuccess: () => onMutate(),
     onError: (e) => toast.error(e.message),
   });
-  const addField = trpc.onboarding.stages.addCustomField.useMutation({
-    onSuccess: () => onMutate(),
-    onError: (e) => toast.error(e.message),
-  });
   const comment = trpc.onboarding.stages.comment.useMutation({
     onSuccess: () => {
       setCommentBody("");
@@ -292,33 +476,25 @@ function StagePanel({
     },
     onError: (e) => toast.error(e.message),
   });
-  const completeStage = trpc.onboarding.stages.complete.useMutation({
-    onSuccess: () => {
-      toast.success("Stage marked complete");
-      onMutate();
-    },
+  const deleteComment = trpc.onboarding.stages.deleteComment.useMutation({
+    onSuccess: () => onMutate(),
     onError: (e) => toast.error(e.message),
   });
-  const reopenStage = trpc.onboarding.stages.reopen.useMutation({
-    onSuccess: () => {
-      toast.success("Stage reopened");
-      onMutate();
-    },
+  const markReceived = trpc.onboarding.stages.markNotificationReceived.useMutation({
+    onSuccess: () => { toast.success("Marked as received"); onMutate(); },
     onError: (e) => toast.error(e.message),
   });
-  const notifyNext = trpc.onboarding.stages.notifyNext.useMutation({
-    onSuccess: () => {
-      toast.success("Next stage notified");
-      onMutate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
+
+  const stageComments = useMemo(() => {
+    return [...(events ?? [])]
+      .filter((e: any) => e.stageInstanceId === stage.id && e.eventType === "comment_added")
+      .reverse();
+  }, [events, stage.id]);
+
   const [commentBody, setCommentBody] = useState("");
   const [addItemOpen, setAddItemOpen] = useState(false);
-  const [addFieldOpen, setAddFieldOpen] = useState(false);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
 
-  // Property Info card state
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(propertyName ?? "");
   const [editAddress, setEditAddress] = useState(projectAddress ?? "");
@@ -339,7 +515,6 @@ function StagePanel({
     });
   }
 
-  // Filter schema fields that aren't already shown as top-level (address, property_name)
   const extraKickoffSchema = kickoffSchema.filter(
     (f) => !["address", "property_name"].includes(f.key),
   );
@@ -348,41 +523,50 @@ function StagePanel({
   );
 
   return (
-    <div className="space-y-6">
-      {/* Action buttons */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {stage.state !== "done" ? (
-          <Button
-            onClick={() =>
-              completeStage.mutate({ stageInstanceId: stage.id })
-            }
-            className="gap-1.5"
-          >
-            <CheckCircle2 className="h-4 w-4" /> Mark stage complete
-          </Button>
-        ) : (
-          <Button
-            variant="outline"
-            onClick={() =>
-              reopenStage.mutate({ stageInstanceId: stage.id })
-            }
-            className="gap-1.5"
-          >
-            <RotateCw className="h-4 w-4" /> Reopen stage
-          </Button>
-        )}
-        {!isLastStage && (
-          <Button
-            variant="secondary"
-            onClick={() => notifyNext.mutate({ stageInstanceId: stage.id })}
-            className="gap-1.5"
-          >
-            <ArrowRight className="h-4 w-4" /> Notify next stage
-          </Button>
+    <div className="space-y-5">
+      {/* Stage header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <Badge variant="secondary" className={`${STATE_BADGE[stage.state] ?? ""}`}>
+            {STATE_LABEL[stage.state] ?? stage.state}
+          </Badge>
+          {!isKickoff && stage.ownerName && (
+            <span className="text-sm text-muted-foreground">{stage.ownerName}</span>
+          )}
+        </div>
+        {!isKickoff && checklistTotal > 0 && (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {checklistDone}/{checklistTotal} done
+          </span>
         )}
       </div>
 
-      {/* Property Info card — only on stage 0 */}
+      {/* Handoff received banner */}
+      {stage.notifiedAt && !stage.notificationReceivedAt && (
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-amber-800">
+            <Clock className="h-4 w-4 shrink-0" />
+            This stage has been handed off to you — let the team know you're on it.
+          </div>
+          <Button
+            size="sm"
+            className="shrink-0 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+            disabled={markReceived.isPending}
+            onClick={() => markReceived.mutate({ stageInstanceId: stage.id })}
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Mark as received
+          </Button>
+        </div>
+      )}
+      {stage.notificationReceivedAt && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <CheckCircle2 className="h-4 w-4 shrink-0" />
+          Handoff confirmed — you've acknowledged this stage.
+        </div>
+      )}
+
+      {/* Property Info card — kickoff only */}
       {isKickoff && (
         <Card>
           <CardContent className="p-4 space-y-4">
@@ -410,7 +594,7 @@ function StagePanel({
                   onClick={() => setEmailDialogOpen(true)}
                 >
                   <Mail className="h-4 w-4" />
-                  Send email to team
+                  Send slack to team
                 </Button>
               </div>
             </div>
@@ -425,7 +609,9 @@ function StagePanel({
                   <Label className="text-xs text-muted-foreground">Address</Label>
                   <Input value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="123 Main St, City, ST 12345" />
                 </div>
-                {extraKickoffSchema.map((f) => (
+                {extraKickoffSchema
+                  .filter((f) => f.key !== "pet_fee" || editKickoff.pets_allowed === true)
+                  .map((f) => (
                   <div key={f.key} className={f.type === "longtext" ? "sm:col-span-2" : ""}>
                     <Label className="text-xs text-muted-foreground">{f.label}</Label>
                     {f.type === "longtext" ? (
@@ -446,12 +632,26 @@ function StagePanel({
                           <SelectItem value="no">No</SelectItem>
                         </SelectContent>
                       </Select>
+                    ) : f.type === "money" ? (
+                      <div className="relative mt-1">
+                        {(editKickoff[f.key] !== undefined && editKickoff[f.key] !== "") && (
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-zinc-500 pointer-events-none">$</span>
+                        )}
+                        <Input
+                          type="number"
+                          value={(editKickoff[f.key] as string) ?? ""}
+                          onChange={(e) => setEditKickoff((p) => ({ ...p, [f.key]: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                          placeholder={f.placeholder ?? "0"}
+                          className={(editKickoff[f.key] !== undefined && editKickoff[f.key] !== "") ? "pl-6" : ""}
+                        />
+                      </div>
                     ) : (
                       <Input
-                        type={f.type === "number" || f.type === "money" ? "number" : f.type === "url" ? "url" : f.type === "date" ? "date" : "text"}
+                        type={f.type === "number" ? "number" : f.type === "url" ? "url" : f.type === "date" ? "date" : "text"}
                         value={(editKickoff[f.key] as string) ?? ""}
                         onChange={(e) => setEditKickoff((p) => ({ ...p, [f.key]: e.target.value }))}
                         className="mt-1"
+                        placeholder={f.placeholder}
                       />
                     )}
                   </div>
@@ -471,7 +671,9 @@ function StagePanel({
                     <p className="text-sm">{projectAddress}</p>
                   </div>
                 )}
-                {kickoffFields.map((f) => (
+                {kickoffFields
+                  .filter((f) => f.key !== "pet_fee" || kickoffData.pets_allowed === true)
+                  .map((f) => (
                   <div key={f.key} className={f.type === "longtext" ? "sm:col-span-2" : "min-w-0"}>
                     <p className="text-xs text-muted-foreground">{f.label}</p>
                     {f.type === "url" ? (
@@ -484,6 +686,8 @@ function StagePanel({
                       >
                         {String(kickoffData[f.key])}
                       </a>
+                    ) : f.type === "money" ? (
+                      <p className="text-sm">${kickoffData[f.key]}</p>
                     ) : (
                       <p className="text-sm truncate">
                         {typeof kickoffData[f.key] === "boolean"
@@ -502,166 +706,129 @@ function StagePanel({
         </Card>
       )}
 
-      {/* Team assignments — kickoff only */}
-      {isKickoff && allStages && allStagesConfig && allStagesConfig.length > 1 && (
+      {/* Checklist */}
+      {(templateItems.length > 0 || customItems.length > 0 || !isKickoff) && (
         <Card>
           <CardContent className="p-4 space-y-3">
-            <p className="font-medium text-sm">Team</p>
-            <div className="divide-y">
-              {allStagesConfig.slice(1).map((cfg, i) => {
-                const si = allStages[i + 1];
-                if (!si) return null;
-                return (
-                  <StageAssignRow
-                    key={cfg.key}
-                    stageLabel={cfg.label}
-                    stageInstance={si}
-                    onMutate={onMutate}
-                  />
-                );
-              })}
+            <div className="flex items-center justify-between">
+              <p className="font-medium text-sm">Checklist</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setAddItemOpen(true)}
+                className="gap-1"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add item
+              </Button>
+            </div>
+            <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden -mt-1">
+              <div
+                className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                style={{ width: checklistTotal > 0 ? `${(checklistDone / checklistTotal) * 100}%` : "0%" }}
+              />
+            </div>
+            <div className="space-y-0.5">
+              {templateItems.length === 0 && customItems.length === 0 && (
+                <p className="text-xs text-muted-foreground">No checklist items yet.</p>
+              )}
+              {visibleTemplateItems.map((it) => (
+                <ChecklistRow
+                  key={it.id}
+                  item={{ ...it, label: checklistState[it.id]?.labelOverride ?? it.label }}
+                  state={checklistState[it.id]}
+                  onToggle={(done, note) =>
+                    toggleItem.mutate({
+                      stageInstanceId: stage.id,
+                      itemId: it.id,
+                      done,
+                      ...(note !== undefined ? { note } : {}),
+                    })
+                  }
+                  onRename={(label) => updateItemMeta.mutate({ stageInstanceId: stage.id, itemId: it.id, label })}
+                  onDelete={() => updateItemMeta.mutate({ stageInstanceId: stage.id, itemId: it.id, hidden: true })}
+                />
+              ))}
+              {customItems.map((it) => (
+                <ChecklistRow
+                  key={it.id}
+                  item={it}
+                  custom
+                  state={checklistState[it.id]}
+                  onToggle={(done, note) =>
+                    toggleItem.mutate({
+                      stageInstanceId: stage.id,
+                      itemId: it.id,
+                      done,
+                      ...(note !== undefined ? { note } : {}),
+                    })
+                  }
+                  onRename={(label) => updateItemMeta.mutate({ stageInstanceId: stage.id, itemId: it.id, label })}
+                  onDelete={() => updateItemMeta.mutate({ stageInstanceId: stage.id, itemId: it.id, hidden: true })}
+                />
+              ))}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Checklist — hidden on kickoff stage */}
-      {!isKickoff && <Card>
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="font-medium text-sm">Checklist</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setAddItemOpen(true)}
-              className="gap-1"
-            >
-              <Plus className="h-3.5 w-3.5" /> Add item
-            </Button>
-          </div>
-          <div className="space-y-2">
-            {templateItems.length === 0 && customItems.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                No checklist items yet.
-              </p>
-            )}
-            {templateItems.map((it) => (
-              <ChecklistRow
-                key={it.id}
-                item={it}
-                state={checklistState[it.id]}
-                onToggle={(done, note) =>
-                  toggleItem.mutate({
-                    stageInstanceId: stage.id,
-                    itemId: it.id,
-                    done,
-                    ...(note !== undefined ? { note } : {}),
-                  })
-                }
-              />
-            ))}
-            {customItems.map((it) => (
-              <ChecklistRow
-                key={it.id}
-                item={it}
-                custom
-                state={checklistState[it.id]}
-                onToggle={(done, note) =>
-                  toggleItem.mutate({
-                    stageInstanceId: stage.id,
-                    itemId: it.id,
-                    done,
-                    ...(note !== undefined ? { note } : {}),
-                  })
-                }
-              />
-            ))}
-          </div>
-        </CardContent>
-      </Card>}
-
-      {/* Fields — hidden on kickoff stage */}
-      {!isKickoff && <Card>
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="font-medium text-sm">Stage info</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setAddFieldOpen(true)}
-              className="gap-1"
-            >
-              <Plus className="h-3.5 w-3.5" /> Add field
-            </Button>
-          </div>
-          {stageDef.defaultFields.length === 0 && customFields.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              No fields defined for this stage. Add one if this property needs
-              something extra captured.
+      {/* Comments — hidden on kickoff */}
+      {!isKickoff && (
+        <Card>
+          <CardContent className="p-4 space-y-3">
+            <p className="font-medium text-sm flex items-center gap-1.5">
+              <MessageSquarePlus className="h-4 w-4" /> Comments
             </p>
-          )}
-          <div className="space-y-3">
-            {stageDef.defaultFields.map((f) => (
-              <StageField
-                key={f.key}
-                field={f}
-                value={stageData[f.key]}
-                onSave={(v) =>
-                  updateField.mutate({
-                    stageInstanceId: stage.id,
-                    fieldKey: f.key,
-                    value: v,
-                  })
-                }
-              />
-            ))}
-            {customFields.map((f) => (
-              <StageField
-                key={`custom_${f.key}`}
-                field={f}
-                value={stageData[f.key]}
-                custom
-                onSave={(v) =>
-                  updateField.mutate({
-                    stageInstanceId: stage.id,
-                    fieldKey: f.key,
-                    value: v,
-                  })
-                }
-              />
-            ))}
-          </div>
-        </CardContent>
-      </Card>}
 
-      {/* Comment — hidden on kickoff stage */}
-      {!isKickoff && <Card>
-        <CardContent className="p-4 space-y-2">
-          <p className="font-medium text-sm flex items-center gap-1.5">
-            <MessageSquarePlus className="h-4 w-4" /> Add a comment
-          </p>
-          <Textarea
-            value={commentBody}
-            onChange={(e) => setCommentBody(e.target.value)}
-            placeholder="Add a note for the team about this stage…"
-            rows={2}
-          />
-          <div className="flex justify-end">
-            <Button
-              size="sm"
-              disabled={!commentBody.trim() || comment.isPending}
-              onClick={() =>
-                comment.mutate({
-                  stageInstanceId: stage.id,
-                  body: commentBody.trim(),
-                })
-              }
-            >
-              {comment.isPending ? "Posting…" : "Post comment"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>}
+            {stageComments.length > 0 && (
+              <div className="space-y-3 divide-y divide-zinc-100">
+                {stageComments.map((e: any) => (
+                  <div key={e.id} className="flex items-start gap-2 group pt-3 first:pt-0">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-medium text-zinc-800">{e.actorName ?? "Someone"}</span>
+                        <span className="text-[11px] text-muted-foreground">
+                          {new Date(e.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      <p className="text-sm text-zinc-700 mt-0.5 whitespace-pre-wrap">{(e.data as any)?.body}</p>
+                    </div>
+                    <button
+                      onClick={() => deleteComment.mutate({ eventId: e.id })}
+                      disabled={deleteComment.isPending}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-zinc-400 hover:text-red-500 rounded shrink-0 mt-0.5"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Textarea
+                value={commentBody}
+                onChange={(e) => setCommentBody(e.target.value)}
+                placeholder="Add a note for the team about this stage…"
+                rows={2}
+              />
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  disabled={!commentBody.trim() || comment.isPending}
+                  onClick={() =>
+                    comment.mutate({
+                      stageInstanceId: stage.id,
+                      body: commentBody.trim(),
+                    })
+                  }
+                >
+                  {comment.isPending ? "Posting…" : "Post comment"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <AddItemDialog
         open={addItemOpen}
@@ -673,18 +840,8 @@ function StagePanel({
           )
         }
       />
-      <AddFieldDialog
-        open={addFieldOpen}
-        onClose={() => setAddFieldOpen(false)}
-        onSubmit={(payload) =>
-          addField.mutate(
-            { stageInstanceId: stage.id, ...payload },
-            { onSuccess: () => setAddFieldOpen(false) },
-          )
-        }
-      />
       {isKickoff && (
-        <EmailTeamDialog
+        <SlackTeamDialog
           open={emailDialogOpen}
           onClose={() => setEmailDialogOpen(false)}
           projectId={projectId}
@@ -700,79 +857,119 @@ function StagePanel({
   );
 }
 
-// ── Checklist Row (inline note editor) ────────────────────────────────
+// ── Checklist Row ─────────────────────────────────────────────────────
 function ChecklistRow({
   item,
   state,
   onToggle,
+  onRename,
+  onDelete,
   custom,
 }: {
   item: ChecklistItemDef;
-  state?: { done?: boolean; note?: string };
+  state?: { done?: boolean; note?: string; hidden?: boolean };
   onToggle: (done: boolean, note?: string) => void;
+  onRename?: (label: string) => void;
+  onDelete?: () => void;
   custom?: boolean;
 }) {
   const [noteOpen, setNoteOpen] = useState(false);
   const [draftNote, setDraftNote] = useState(state?.note ?? "");
+  const [editing, setEditing] = useState(false);
+  const [draftLabel, setDraftLabel] = useState(item.label);
+  const isDone = !!state?.done;
+
+  function commitRename() {
+    const trimmed = draftLabel.trim();
+    if (trimmed && trimmed !== item.label) onRename?.(trimmed);
+    else setDraftLabel(item.label);
+    setEditing(false);
+  }
 
   return (
-    <div className="border rounded-md p-2.5 space-y-2 hover:bg-zinc-50/50 transition-colors">
-      <div className="flex items-start gap-2">
+    <div className="group">
+      <div className="flex items-start gap-2.5 py-1.5 px-2 rounded-lg hover:bg-zinc-50 transition-colors">
         <Checkbox
-          checked={!!state?.done}
+          checked={isDone}
           onCheckedChange={(c) => onToggle(c === true)}
-          className="mt-0.5"
+          className="mt-[3px] shrink-0"
         />
         <div className="flex-1 min-w-0">
-          <p className="text-sm leading-snug">
-            {item.label}
-            {custom && (
-              <Badge
-                variant="secondary"
-                className="ml-2 text-[10px] py-0 bg-purple-100 text-purple-800"
-              >
-                custom
-              </Badge>
-            )}
-          </p>
-          {item.hint && (
-            <p className="text-xs text-muted-foreground mt-0.5">{item.hint}</p>
-          )}
-          {state?.note && !noteOpen && (
-            <p className="text-xs text-zinc-700 italic mt-1">
-              note: {state.note}
+          {editing ? (
+            <Input
+              autoFocus
+              value={draftLabel}
+              onChange={(e) => setDraftLabel(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") { setDraftLabel(item.label); setEditing(false); }
+              }}
+              className="h-7 text-sm"
+            />
+          ) : (
+            <p className={`text-sm leading-snug transition-colors ${isDone ? "line-through text-zinc-400" : "text-zinc-800"}`}>
+              {item.label}
+              {custom && (
+                <Badge variant="secondary" className="ml-2 text-[10px] py-0 bg-purple-100 text-purple-800">
+                  custom
+                </Badge>
+              )}
             </p>
           )}
+          {item.hint && !editing && (
+            <p className="text-xs text-muted-foreground mt-0.5">{item.hint}</p>
+          )}
+          {state?.note && !noteOpen && !editing && (
+            <p className="text-xs text-zinc-500 italic mt-0.5">Note: {state.note}</p>
+          )}
         </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="text-xs"
-          onClick={() => {
-            setDraftNote(state?.note ?? "");
-            setNoteOpen((o) => !o);
-          }}
-        >
-          {state?.note ? "Edit note" : "Add note"}
-        </Button>
+        {!editing && (
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5">
+            <button
+              onClick={() => { setDraftNote(state?.note ?? ""); setNoteOpen((o) => !o); }}
+              className="px-1.5 py-0.5 text-[11px] rounded text-zinc-400 hover:text-zinc-700 transition-colors"
+            >
+              {state?.note ? "note" : "+ note"}
+            </button>
+            {onRename && (
+              <button onClick={() => { setDraftLabel(item.label); setEditing(true); }} className="p-1 text-zinc-400 hover:text-zinc-700 rounded">
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
+            {onDelete && (
+              <button onClick={onDelete} className="p-1 text-zinc-400 hover:text-red-500 rounded">
+                <Trash2 className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {noteOpen && (
-        <div className="flex items-center gap-2 pl-6">
+        <div className="flex items-center gap-2 pl-9 pb-1.5 pr-2">
           <Input
             value={draftNote}
             onChange={(e) => setDraftNote(e.target.value)}
             placeholder="e.g. waiting on photos from owner"
-            className="h-8 text-xs"
+            className="h-7 text-xs"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { onToggle(isDone, draftNote); setNoteOpen(false); }
+              if (e.key === "Escape") setNoteOpen(false);
+            }}
           />
           <Button
             size="sm"
-            onClick={() => {
-              onToggle(!!state?.done, draftNote);
-              setNoteOpen(false);
-            }}
+            className="h-7 px-2 text-xs shrink-0"
+            onClick={() => { onToggle(isDone, draftNote); setNoteOpen(false); }}
           >
             Save
           </Button>
+          <button
+            className="p-1 text-zinc-400 hover:text-zinc-600 rounded shrink-0"
+            onClick={() => setNoteOpen(false)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
     </div>
@@ -803,15 +1000,9 @@ function StageField({
     if (!dirty) return;
     onSave(
       field.type === "money" || field.type === "number"
-        ? draft === "" || draft === null
-          ? null
-          : Number(draft)
+        ? draft === "" || draft === null ? null : Number(draft)
         : field.type === "boolean"
-          ? draft === "yes"
-            ? true
-            : draft === "no"
-              ? false
-              : null
+          ? draft === "yes" ? true : draft === "no" ? false : null
           : draft,
     );
     setDirty(false);
@@ -823,10 +1014,7 @@ function StageField({
         <Label className="text-xs">
           {field.label}
           {custom && (
-            <Badge
-              variant="secondary"
-              className="ml-2 text-[10px] py-0 bg-purple-100 text-purple-800"
-            >
+            <Badge variant="secondary" className="ml-2 text-[10px] py-0 bg-purple-100 text-purple-800">
               custom
             </Badge>
           )}
@@ -840,10 +1028,7 @@ function StageField({
       {field.type === "longtext" ? (
         <Textarea
           value={draft ?? ""}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setDirty(true);
-          }}
+          onChange={(e) => { setDraft(e.target.value); setDirty(true); }}
           onBlur={commit}
           rows={2}
         />
@@ -853,7 +1038,6 @@ function StageField({
           onValueChange={(v) => {
             setDraft(v);
             setDirty(true);
-            // Boolean changes commit on selection
             onSave(v === "yes" ? true : v === "no" ? false : null);
             setDirty(false);
           }}
@@ -869,19 +1053,13 @@ function StageField({
       ) : (
         <Input
           type={
-            field.type === "money" || field.type === "number"
-              ? "number"
-              : field.type === "url"
-                ? "url"
-                : field.type === "date"
-                  ? "date"
+            field.type === "money" || field.type === "number" ? "number"
+              : field.type === "url" ? "url"
+                : field.type === "date" ? "date"
                   : "text"
           }
           value={draft ?? ""}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setDirty(true);
-          }}
+          onChange={(e) => { setDraft(e.target.value); setDirty(true); }}
           onBlur={commit}
           placeholder={field.placeholder}
         />
@@ -903,49 +1081,25 @@ function AddItemDialog({
   const [label, setLabel] = useState("");
   const [hint, setHint] = useState("");
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) {
-          setLabel("");
-          setHint("");
-          onClose();
-        }
-      }}
-    >
+    <Dialog open={open} onOpenChange={(o) => { if (!o) { setLabel(""); setHint(""); onClose(); } }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add a custom checklist item</DialogTitle>
-          <DialogDescription>
-            Specific to this property — won't change the template.
-          </DialogDescription>
+          <DialogDescription>Specific to this property — won't change the template.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label>Item</Label>
-            <Input
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. Replace lockbox code per owner"
-            />
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Replace lockbox code per owner" />
           </div>
           <div className="space-y-1.5">
             <Label>Hint (optional)</Label>
-            <Input
-              value={hint}
-              onChange={(e) => setHint(e.target.value)}
-              placeholder="More context"
-            />
+            <Input value={hint} onChange={(e) => setHint(e.target.value)} placeholder="More context" />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            disabled={!label.trim()}
-            onClick={() => onSubmit(label.trim(), hint.trim() || undefined)}
-          >
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button disabled={!label.trim()} onClick={() => onSubmit(label.trim(), hint.trim() || undefined)}>
             Add item
           </Button>
         </DialogFooter>
@@ -954,88 +1108,145 @@ function AddItemDialog({
   );
 }
 
-// ── Add Field Dialog ──────────────────────────────────────────────────
-function AddFieldDialog({
+// ── Notify Next Stage Dialog ──────────────────────────────────────────
+
+function buildNotifyNextMessage(opts: {
+  propertyName?: string;
+  currentStageName: string;
+  currentStageOwnerName: string | null;
+  nextStageName: string | null;
+  nextStageOwnerName: string | null;
+  nextStageOwnerSlackId: string | null;
+  projectId: number;
+}): string {
+  const mention = opts.nextStageOwnerSlackId
+    ? `<@${opts.nextStageOwnerSlackId}>`
+    : opts.nextStageOwnerName
+      ? `*${opts.nextStageOwnerName.split(" ")[0]}*`
+      : "team";
+
+  const property = opts.propertyName ?? "a new property";
+  const next = opts.nextStageName ?? "your stage";
+
+  return [
+    `Hey ${mention}!`,
+    "",
+    `The stage *${opts.currentStageName}* for *${property}* has been completed. *${next}* is ready to be started!`,
+  ].join("\n");
+}
+
+function NotifyNextDialog({
   open,
   onClose,
-  onSubmit,
+  stageInstanceId,
+  projectId,
+  propertyName,
+  currentStageName,
+  currentStageOwnerName,
+  nextStageName,
+  nextStageOwnerName,
+  nextStageOwnerSlackId,
+  isSameOwner,
+  notifyNext,
+  onMutate,
 }: {
   open: boolean;
   onClose: () => void;
-  onSubmit: (payload: {
-    key: string;
-    label: string;
-    type: FieldDef["type"];
-    value?: any;
-  }) => void;
+  stageInstanceId: number;
+  projectId: number;
+  propertyName?: string;
+  currentStageName: string;
+  currentStageOwnerName: string | null;
+  nextStageName: string | null;
+  nextStageOwnerName: string | null;
+  nextStageOwnerSlackId: string | null;
+  isSameOwner: boolean;
+  notifyNext: ReturnType<typeof trpc.onboarding.stages.notifyNext.useMutation>;
+  onMutate: () => void;
 }) {
-  const [label, setLabel] = useState("");
-  const [type, setType] = useState<FieldDef["type"]>("text");
+  const [message, setMessage] = useState("");
 
-  function submit() {
-    if (!label.trim()) return;
-    const key = label
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 60);
-    onSubmit({ key: key || `field_${Date.now()}`, label: label.trim(), type });
-    setLabel("");
-    setType("text");
+  useEffect(() => {
+    if (!open) return;
+    setMessage(buildNotifyNextMessage({
+      propertyName,
+      currentStageName,
+      currentStageOwnerName,
+      nextStageName,
+      nextStageOwnerName,
+      nextStageOwnerSlackId,
+      projectId,
+    }));
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleSend() {
+    notifyNext.mutate(
+      { stageInstanceId, slackMessage: message.trim() || undefined },
+      {
+        onSuccess: () => { toast.success("Next stage notified"); onMutate(); onClose(); },
+        onError: (e) => toast.error(e.message),
+      },
+    );
   }
+
+  function handleSkip() {
+    notifyNext.mutate(
+      { stageInstanceId },
+      {
+        onSuccess: () => { onMutate(); onClose(); },
+        onError: (e) => toast.error(e.message),
+      },
+    );
+  }
+
+  const toName = nextStageOwnerName ? nextStageOwnerName.split(" ")[0] : "next stage";
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) {
-          setLabel("");
-          setType("text");
-          onClose();
-        }
-      }}
-    >
-      <DialogContent>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Add a custom field</DialogTitle>
+          <DialogTitle>Notify {toName} — {nextStageName ?? "next stage"}</DialogTitle>
           <DialogDescription>
-            Capture something this property needs that the template doesn't
-            cover.
+            {nextStageOwnerSlackId
+              ? `This will post to #onboarding and @mention ${nextStageOwnerName?.split(" ")[0] ?? "them"} directly.`
+              : nextStageOwnerName
+                ? `${nextStageOwnerName.split(" ")[0]} doesn't have a Slack account linked — this will post to #onboarding without a mention.`
+                : "This will post to #onboarding."}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+
+        <div className="space-y-4 py-2">
+          <div className="rounded-md bg-zinc-50 border px-3 py-2 text-xs text-zinc-500 space-y-0.5">
+            <p className="font-medium text-zinc-700">Stage handoff</p>
+            <p>Completing: <span className="font-medium text-zinc-800">{currentStageName}</span></p>
+            <p>Handing off to: <span className="font-medium text-zinc-800">{nextStageName ?? "next stage"}</span>
+              {nextStageOwnerName ? ` → ${nextStageOwnerName}` : ""}
+            </p>
+          </div>
           <div className="space-y-1.5">
-            <Label>Field label</Label>
-            <Input
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. HOA contact"
+            <Label>Message</Label>
+            <Textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={8}
+              className="font-mono text-xs"
+              placeholder="Type a message…"
             />
           </div>
-          <div className="space-y-1.5">
-            <Label>Type</Label>
-            <Select value={type} onValueChange={(v) => setType(v as any)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="text">Short text</SelectItem>
-                <SelectItem value="longtext">Long text</SelectItem>
-                <SelectItem value="number">Number</SelectItem>
-                <SelectItem value="money">Money</SelectItem>
-                <SelectItem value="url">URL</SelectItem>
-                <SelectItem value="boolean">Yes / No</SelectItem>
-                <SelectItem value="date">Date</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
         </div>
+
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
+          <Button variant="ghost" disabled={notifyNext.isPending} onClick={handleSkip}>
+            Skip message
           </Button>
-          <Button disabled={!label.trim()} onClick={submit}>
-            Add field
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={notifyNext.isPending || !message.trim()}
+            onClick={handleSend}
+            className="gap-1.5"
+          >
+            <ArrowRight className="h-4 w-4" />
+            {notifyNext.isPending ? "Sending…" : `Notify ${toName}`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1043,106 +1254,49 @@ function AddFieldDialog({
   );
 }
 
-// ── Stage Assign Row ──────────────────────────────────────────────────
-function StageAssignRow({
-  stageLabel,
-  stageInstance,
-  onMutate,
-}: {
-  stageLabel: string;
-  stageInstance: any;
-  onMutate: () => void;
-}) {
-  const membersQuery = trpc.onboarding.projects.members.useQuery();
-  const members = membersQuery.data ?? [];
+// ── Slack Team Dialog ─────────────────────────────────────────────────
 
-  const assign = trpc.onboarding.stages.assign.useMutation({
-    onSuccess: () => onMutate(),
-    onError: (e) => toast.error(e.message),
-  });
+type SlackPreset = "kickoff" | "custom";
 
-  return (
-    <div className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
-      <p className="text-sm">{stageLabel}</p>
-      <Select
-        value={stageInstance.ownerUserId ? String(stageInstance.ownerUserId) : "__none__"}
-        onValueChange={(v) =>
-          assign.mutate({
-            stageInstanceId: stageInstance.id,
-            ownerUserId: v === "__none__" ? null : Number(v),
-          })
-        }
-      >
-        <SelectTrigger className="w-[180px] h-8 text-sm">
-          <SelectValue placeholder="Unassigned" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__none__">Unassigned</SelectItem>
-          {members.map((m) => (
-            <SelectItem key={m.id} value={String(m.id)}>
-              {m.name ?? m.email}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
-
-// ── Email Team Dialog ─────────────────────────────────────────────────
-
-const EMAIL_PRESETS = {
-  kickoff: { label: "Kickoff announcement" },
-  custom: { label: "Custom (blank)" },
-} as const;
-
-type PresetKey = keyof typeof EMAIL_PRESETS;
-
-function buildKickoffBody(opts: {
+function buildSlackMessage(opts: {
   propertyName?: string;
   address?: string;
   kickoffData: Record<string, any>;
   kickoffSchema: FieldDef[];
   projectId: number;
   templateName?: string;
-}): { subject: string; body: string } {
+}): string {
   const appUrl = window.location.origin;
   const fieldLines = opts.kickoffSchema
     .filter(
       (f) =>
         !["address", "property_name"].includes(f.key) &&
         opts.kickoffData[f.key] != null &&
-        opts.kickoffData[f.key] !== "",
+        opts.kickoffData[f.key] !== "" &&
+        !(f.key === "pet_fee" && opts.kickoffData.pets_allowed !== true),
     )
-    .map(
-      (f) =>
-        `  ${f.label}: ${typeof opts.kickoffData[f.key] === "boolean" ? (opts.kickoffData[f.key] ? "Yes" : "No") : opts.kickoffData[f.key]}`,
-    )
+    .map((f) => {
+      const val = typeof opts.kickoffData[f.key] === "boolean"
+        ? (opts.kickoffData[f.key] ? "Yes" : "No")
+        : f.type === "money"
+          ? `$${opts.kickoffData[f.key]}`
+          : opts.kickoffData[f.key];
+      return `• *${f.label}:* ${val}`;
+    })
     .join("\n");
 
-  const lines = [
-    "Hi team,",
-    "",
-    `A new property is ready for onboarding: ${opts.propertyName ?? "(unnamed)"}`,
-    opts.address ? `Address: ${opts.address}` : null,
-    opts.templateName ? `Template: ${opts.templateName}` : null,
-    "",
-    fieldLines ? `Property info:\n${fieldLines}` : null,
-    "",
-    `View in Wand: ${appUrl}/onboarding/${opts.projectId}`,
-    "",
-    "— Leisr Stays",
+  return [
+    `🏠 *New property onboarding started: ${opts.propertyName ?? "(unnamed)"}*`,
+    opts.address ? `📍 ${opts.address}` : null,
+    opts.templateName ? `📋 Template: ${opts.templateName}` : null,
+    fieldLines ? `\n${fieldLines}` : null,
+    `\n<${appUrl}/onboarding/${opts.projectId}|View in Wand>`,
   ]
     .filter((l) => l !== null)
     .join("\n");
-
-  return {
-    subject: `[Wand] New onboarding: ${opts.propertyName ?? "new property"}`,
-    body: lines,
-  };
 }
 
-function EmailTeamDialog({
+function SlackTeamDialog({
   open,
   onClose,
   projectId,
@@ -1163,195 +1317,76 @@ function EmailTeamDialog({
   templateName?: string;
   onMutate: () => void;
 }) {
-  const [preset, setPreset] = useState<PresetKey>("kickoff");
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
-
-  const membersQuery = trpc.onboarding.projects.members.useQuery(undefined, {
-    enabled: open,
-  });
-  const members = membersQuery.data ?? [];
+  const [preset, setPreset] = useState<SlackPreset>("kickoff");
+  const [message, setMessage] = useState("");
 
   const notifyTeam = trpc.onboarding.projects.notifyTeam.useMutation({
-    onSuccess: (res) => {
-      toast.success(
-        `Email sent to ${res.sentTo.length} member${res.sentTo.length === 1 ? "" : "s"}`,
-      );
+    onSuccess: () => {
+      toast.success("Slack sent to team");
       onMutate();
       onClose();
     },
     onError: (e) => toast.error(e.message),
   });
 
-  // Auto-populate subject + body when preset or open state changes
   useEffect(() => {
     if (!open) return;
     if (preset === "kickoff") {
-      const built = buildKickoffBody({
+      setMessage(buildSlackMessage({
         propertyName,
         address: projectAddress,
         kickoffData,
         kickoffSchema,
         projectId,
         templateName,
-      });
-      setSubject(built.subject);
-      setBody(built.body);
+      }));
     } else {
-      setSubject("");
-      setBody("");
+      setMessage("");
     }
   }, [preset, open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Select all members by default when dialog opens and members load
-  useEffect(() => {
-    if (open && members.length > 0) {
-      setSelectedEmails(
-        new Set(members.filter((m) => m.email).map((m) => m.email as string)),
-      );
-    }
-  }, [open, members.length]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function toggleEmail(email: string) {
-    setSelectedEmails((prev) => {
-      const next = new Set(prev);
-      if (next.has(email)) next.delete(email);
-      else next.add(email);
-      return next;
-    });
-  }
-
-  function handleSend() {
-    const to = [...selectedEmails];
-    if (to.length === 0) {
-      toast.error("Select at least one recipient");
-      return;
-    }
-    if (!subject.trim()) {
-      toast.error("Subject is required");
-      return;
-    }
-    notifyTeam.mutate({ projectId, to, subject: subject.trim(), body: body.trim() });
-  }
-
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) onClose();
-      }}
-    >
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Send email to team</DialogTitle>
+          <DialogTitle>Send slack to team</DialogTitle>
           <DialogDescription>
-            Choose a template, review the message, and select recipients.
+            Review the message before sending it to the #onboarding Slack channel.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* Template selector */}
           <div className="space-y-1.5">
-            <Label>Email template</Label>
-            <Select
-              value={preset}
-              onValueChange={(v) => setPreset(v as PresetKey)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
+            <Label>Template</Label>
+            <Select value={preset} onValueChange={(v) => setPreset(v as SlackPreset)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {(Object.entries(EMAIL_PRESETS) as [PresetKey, { label: string }][]).map(
-                  ([key, { label }]) => (
-                    <SelectItem key={key} value={key}>
-                      {label}
-                    </SelectItem>
-                  ),
-                )}
+                <SelectItem value="kickoff">Kickoff announcement</SelectItem>
+                <SelectItem value="custom">Custom (blank)</SelectItem>
               </SelectContent>
             </Select>
           </div>
-
-          {/* Subject */}
-          <div className="space-y-1.5">
-            <Label>Subject</Label>
-            <Input
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="Email subject"
-            />
-          </div>
-
-          {/* Body */}
           <div className="space-y-1.5">
             <Label>Message</Label>
             <Textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
               rows={10}
               className="font-mono text-xs"
-              placeholder="Email body…"
+              placeholder="Type a message…"
             />
-          </div>
-
-          {/* Recipients */}
-          <div className="space-y-2">
-            <Label>Recipients</Label>
-            {membersQuery.isLoading ? (
-              <p className="text-xs text-muted-foreground">
-                Loading team members…
-              </p>
-            ) : members.filter((m) => m.email).length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                No team members with emails found.
-              </p>
-            ) : (
-              <div className="border rounded-md p-3 space-y-2">
-                {members
-                  .filter((m) => m.email)
-                  .map((m) => (
-                    <div key={m.id} className="flex items-center gap-2">
-                      <Checkbox
-                        id={`member-${m.id}`}
-                        checked={selectedEmails.has(m.email as string)}
-                        onCheckedChange={() => toggleEmail(m.email as string)}
-                      />
-                      <label
-                        htmlFor={`member-${m.id}`}
-                        className="text-sm cursor-pointer"
-                      >
-                        {m.name ?? m.email}
-                        {m.name && m.email && (
-                          <span className="text-muted-foreground ml-1 text-xs">
-                            ({m.email})
-                          </span>
-                        )}
-                      </label>
-                    </div>
-                  ))}
-              </div>
-            )}
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button
-            disabled={
-              notifyTeam.isPending ||
-              selectedEmails.size === 0 ||
-              !subject.trim()
-            }
-            onClick={handleSend}
+            disabled={notifyTeam.isPending || !message.trim()}
+            onClick={() => notifyTeam.mutate({ projectId, message: message.trim() })}
             className="gap-1.5"
           >
             <Mail className="h-4 w-4" />
-            {notifyTeam.isPending
-              ? "Sending…"
-              : `Send to ${selectedEmails.size} member${selectedEmails.size === 1 ? "" : "s"}`}
+            {notifyTeam.isPending ? "Sending…" : "Send slack to team"}
           </Button>
         </DialogFooter>
       </DialogContent>
