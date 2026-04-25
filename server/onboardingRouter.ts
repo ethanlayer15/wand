@@ -23,14 +23,15 @@ import {
   onboardingProjects,
   onboardingStageInstances,
   onboardingEvents,
+  slackUserLinks,
   users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { TRPCError } from "@trpc/server";
-import { sendEmail } from "./gmail";
+import { postSlackMessage } from "./agents/slack";
+import { ENV } from "./_core/env";
 
 const projectStatusEnum = z.enum(["active", "blocked", "done", "cancelled"]);
-const stageStateEnum = z.enum(["not_started", "in_progress", "done"]);
 
 /** Pull the current user id from tRPC context, throw if anonymous. */
 function requireUserId(ctx: any): number {
@@ -50,11 +51,20 @@ export const onboardingRouter = router({
     list: protectedProcedure.query(async () => {
       const db = await getDb();
       if (!db) return [];
-      return db
+      const rows = await db
         .select()
         .from(onboardingTemplates)
         .where(eq(onboardingTemplates.isActive, true))
         .orderBy(desc(onboardingTemplates.id));
+      // Derive stageOwnerDefaults from defaultOwnerId stored in each stage
+      return rows.map((t) => ({
+        ...t,
+        stageOwnerDefaults: Object.fromEntries(
+          ((t.stagesConfig ?? []) as any[])
+            .filter((s) => s.defaultOwnerId != null)
+            .map((s) => [s.key, s.defaultOwnerId as number]),
+        ) as Record<string, number>,
+      }));
     }),
 
     get: protectedProcedure
@@ -77,6 +87,48 @@ export const onboardingRouter = router({
           .where(where)
           .limit(1);
         return row ?? null;
+      }),
+
+    /** Persist default assignee (user id) per stage key for a template. */
+    setStageDefaults: managerProcedure
+      .input(z.object({
+        templateId: z.number(),
+        defaults: z.record(z.string(), z.number()),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [tmpl] = await db
+          .select()
+          .from(onboardingTemplates)
+          .where(eq(onboardingTemplates.id, input.templateId))
+          .limit(1);
+        if (!tmpl) throw new TRPCError({ code: "NOT_FOUND" });
+        const updated = ((tmpl.stagesConfig ?? []) as any[]).map((s) => ({
+          ...s,
+          defaultOwnerId: input.defaults[s.key] ?? s.defaultOwnerId ?? null,
+        }));
+        await db
+          .update(onboardingTemplates)
+          .set({ stagesConfig: updated as any })
+          .where(eq(onboardingTemplates.id, input.templateId));
+        return { ok: true };
+      }),
+
+    /** Replace the full stagesConfig for a template (checklist edits). */
+    updateChecklist: managerProcedure
+      .input(z.object({
+        templateId: z.number(),
+        stagesConfig: z.array(z.any()),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db
+          .update(onboardingTemplates)
+          .set({ stagesConfig: input.stagesConfig as any })
+          .where(eq(onboardingTemplates.id, input.templateId));
+        return { ok: true };
       }),
   }),
 
@@ -148,11 +200,45 @@ export const onboardingRouter = router({
             stage: onboardingStageInstances,
             ownerName: users.name,
             ownerEmail: users.email,
+            ownerSlackUserId: slackUserLinks.slackUserId,
           })
           .from(onboardingStageInstances)
           .leftJoin(users, eq(users.id, onboardingStageInstances.ownerUserId))
+          .leftJoin(slackUserLinks, eq(slackUserLinks.userId, onboardingStageInstances.ownerUserId))
           .where(eq(onboardingStageInstances.projectId, input.id))
           .orderBy(onboardingStageInstances.stageIndex);
+
+        // For stages with no explicit owner, fall back to template defaultOwnerId
+        const stagesConfig = (template?.stagesConfig ?? []) as Array<{ key: string; defaultOwnerId?: number | null }>;
+        const missingOwnerIds = Array.from(new Set(
+          stages
+            .filter((s) => s.stage.ownerUserId == null)
+            .map((_s, i) => stagesConfig[i]?.defaultOwnerId)
+            .filter((id): id is number => id != null),
+        ));
+
+        const defaultOwnerMap = new Map<number, { name: string | null; slackUserId: string | null }>();
+        if (missingOwnerIds.length > 0) {
+          const defaultUsers = await db
+            .select({ id: users.id, name: users.name, slackUserId: slackUserLinks.slackUserId })
+            .from(users)
+            .leftJoin(slackUserLinks, eq(slackUserLinks.userId, users.id))
+            .where(eq(users.id, missingOwnerIds[0])); // fetched one-by-one below is fine for small N
+          // Re-fetch all at once via in() isn't imported — loop instead
+          await Promise.all(
+            missingOwnerIds.map(async (uid) => {
+              const [u] = await db
+                .select({ name: users.name, slackUserId: slackUserLinks.slackUserId })
+                .from(users)
+                .leftJoin(slackUserLinks, eq(slackUserLinks.userId, users.id))
+                .where(eq(users.id, uid))
+                .limit(1);
+              if (u) defaultOwnerMap.set(uid, { name: u.name ?? null, slackUserId: u.slackUserId ?? null });
+            }),
+          );
+          // discard the first query result (it was redundant)
+          void defaultUsers;
+        }
 
         const events = await db
           .select()
@@ -164,11 +250,17 @@ export const onboardingRouter = router({
         return {
           project,
           template,
-          stages: stages.map((s) => ({
-            ...s.stage,
-            ownerName: s.ownerName,
-            ownerEmail: s.ownerEmail,
-          })),
+          stages: stages.map((s, i) => {
+            const defId = s.stage.ownerUserId == null ? (stagesConfig[i]?.defaultOwnerId ?? null) : null;
+            const defOwner = defId != null ? defaultOwnerMap.get(defId) : null;
+            return {
+              ...s.stage,
+              ownerUserId: s.stage.ownerUserId ?? defId ?? null,
+              ownerName: s.ownerName ?? defOwner?.name ?? null,
+              ownerEmail: s.ownerEmail ?? null,
+              ownerSlackUserId: s.ownerSlackUserId ?? defOwner?.slackUserId ?? null,
+            };
+          }),
           events,
         };
       }),
@@ -204,6 +296,7 @@ export const onboardingRouter = router({
         const stages = (template.stagesConfig ?? []) as Array<{
           key: string;
           label: string;
+          defaultOwnerId?: number | null;
         }>;
         if (stages.length === 0) {
           throw new TRPCError({
@@ -224,7 +317,7 @@ export const onboardingRouter = router({
         });
         const projectId = insertProject.insertId;
 
-        // Create one stage instance per template stage
+        // Create one stage instance per template stage, seeding ownerUserId from template defaults
         await db.insert(onboardingStageInstances).values(
           stages.map((s, i) => ({
             projectId,
@@ -232,6 +325,7 @@ export const onboardingRouter = router({
             stageKey: s.key,
             state: i === 0 ? ("in_progress" as const) : ("not_started" as const),
             startedAt: i === 0 ? new Date() : null,
+            ownerUserId: s.defaultOwnerId ?? null,
             checklistState: {},
             stageData: {},
           })),
@@ -311,14 +405,12 @@ export const onboardingRouter = router({
         .orderBy(asc(users.name));
     }),
 
-    /** Send a custom email to selected team members. */
+    /** Post a message to the #onboarding Slack channel. */
     notifyTeam: protectedProcedure
       .input(
         z.object({
           projectId: z.number(),
-          to: z.array(z.string()),
-          subject: z.string().min(1).max(500),
-          body: z.string().min(1).max(50000),
+          message: z.string().min(1).max(4000),
         }),
       )
       .mutation(async ({ input, ctx }) => {
@@ -326,24 +418,44 @@ export const onboardingRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const actorId = requireUserId(ctx);
 
-        if (input.to.length === 0) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Select at least one recipient." });
+        const token = ENV.onboardingSlackBotToken;
+        const channel = ENV.onboardingSlackChannelId;
+        if (!token || !channel) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Onboarding Slack is not configured (missing bot token or channel ID).",
+          });
         }
 
-        await sendEmail({
-          to: input.to.join(", "),
-          subject: input.subject,
-          text: input.body,
-        });
+        const result = await postSlackMessage(token, channel, input.message);
+        if (!result.ok) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Slack error: ${result.error ?? "unknown"}`,
+          });
+        }
+
+        // Persist thread TS on the project so notifyNext can reply in-thread
+        if (result.ts) {
+          const [proj] = await db
+            .select({ kickoffData: onboardingProjects.kickoffData })
+            .from(onboardingProjects)
+            .where(eq(onboardingProjects.id, input.projectId))
+            .limit(1);
+          await db
+            .update(onboardingProjects)
+            .set({ kickoffData: { ...(proj?.kickoffData ?? {}), _kickoffSlackTs: result.ts } })
+            .where(eq(onboardingProjects.id, input.projectId));
+        }
 
         await db.insert(onboardingEvents).values({
           projectId: input.projectId,
-          eventType: "team_notified",
+          eventType: "notify_next",
           actorUserId: actorId,
-          data: { sentTo: input.to },
+          data: { slackTs: result.ts },
         });
 
-        return { ok: true, sentTo: input.to };
+        return { ok: true };
       }),
   }),
 
@@ -537,7 +649,10 @@ export const onboardingRouter = router({
      * `notify_next` event.
      */
     notifyNext: protectedProcedure
-      .input(z.object({ stageInstanceId: z.number() }))
+      .input(z.object({
+        stageInstanceId: z.number(),
+        slackMessage: z.string().max(4000).optional(),
+      }))
       .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -568,10 +683,13 @@ export const onboardingRouter = router({
           });
         }
 
+        const now = new Date();
+        const skipped = !input.slackMessage;
+
         if (nextStage.state === "not_started") {
           await db
             .update(onboardingStageInstances)
-            .set({ state: "in_progress", startedAt: new Date() })
+            .set({ state: "in_progress", startedAt: now })
             .where(eq(onboardingStageInstances.id, nextStage.id));
           await db.insert(onboardingEvents).values({
             projectId: stage.projectId,
@@ -581,6 +699,12 @@ export const onboardingRouter = router({
             data: { stageIndex: nextStage.stageIndex, stageKey: nextStage.stageKey },
           });
         }
+
+        // Stamp the next stage with notification status
+        await db
+          .update(onboardingStageInstances)
+          .set({ notifiedAt: now, notificationSkipped: skipped })
+          .where(eq(onboardingStageInstances.id, nextStage.id));
 
         await db
           .update(onboardingProjects)
@@ -600,7 +724,54 @@ export const onboardingRouter = router({
             currentStageStillOpen: stage.state !== "done",
           },
         });
+
+        // Post to #onboarding as a thread reply on the kickoff message
+        if (input.slackMessage) {
+          const token = ENV.onboardingSlackBotToken;
+          const channel = ENV.onboardingSlackChannelId;
+          if (token && channel) {
+            const [proj] = await db
+              .select({ kickoffData: onboardingProjects.kickoffData })
+              .from(onboardingProjects)
+              .where(eq(onboardingProjects.id, stage.projectId))
+              .limit(1);
+            const threadTs = (proj?.kickoffData as any)?._kickoffSlackTs as string | undefined;
+            await postSlackMessage(token, channel, input.slackMessage, threadTs);
+          }
+        }
+
         return { ok: true, nextStageInstanceId: nextStage.id };
+      }),
+
+    /** Stage owner confirms they received the handoff — lets the team know they're on it. */
+    markNotificationReceived: protectedProcedure
+      .input(z.object({ stageInstanceId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const userId = requireUserId(ctx);
+
+        const [stage] = await db
+          .select()
+          .from(onboardingStageInstances)
+          .where(eq(onboardingStageInstances.id, input.stageInstanceId))
+          .limit(1);
+        if (!stage) throw new TRPCError({ code: "NOT_FOUND" });
+
+        await db
+          .update(onboardingStageInstances)
+          .set({ notificationReceivedAt: new Date() })
+          .where(eq(onboardingStageInstances.id, input.stageInstanceId));
+
+        await db.insert(onboardingEvents).values({
+          projectId: stage.projectId,
+          stageInstanceId: stage.id,
+          eventType: "stage_started",
+          actorUserId: userId,
+          data: { acknowledged: true, stageIndex: stage.stageIndex, stageKey: stage.stageKey },
+        });
+
+        return { ok: true };
       }),
 
     /** Toggle a checklist item done / undone (with optional note). */

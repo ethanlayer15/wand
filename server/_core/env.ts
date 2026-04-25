@@ -44,4 +44,8 @@ export const ENV = {
   slackStarrySigningSecret: process.env.SLACK_STARRY_SIGNING_SECRET ?? "",
   // Channel Wanda uses for daily urgent-task digest posts
   leisrOpsSlackChannelId: process.env.LEISR_OPS_SLACK_CHANNEL_ID ?? "",
+  // Onboarding Slack integration
+  onboardingSlackWebhookUrl: process.env.ONBOARDING_SLACK_WEBHOOK_URL ?? "",
+  onboardingSlackBotToken: process.env.WAND_ONBOARDING_BOT_TOKEN ?? "",
+  onboardingSlackChannelId: process.env.ONBOARDING_SLACK_CHANNEL_ID ?? "",
 };
